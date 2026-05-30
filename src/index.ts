@@ -27,9 +27,12 @@ export default function piAgentView(pi: ExtensionAPI): void {
 	});
 
 	// Footer status: reconcile stale rows and surface how many need attention.
+	const serviceFor = (ctx: ExtensionContext) =>
+		createService({ root, runnerScript: RUNNER_SCRIPT, piCommand, piArgsPrefix, defaultCwd: ctx.cwd });
+
 	const updateStatus = (ctx: ExtensionContext) => {
 		try {
-			createService({ root, runnerScript: RUNNER_SCRIPT, piCommand, piArgsPrefix, defaultCwd: ctx.cwd }).reconcile();
+			serviceFor(ctx).reconcile();
 			const rows = listRows(root);
 			const needs = rows.filter((r) => r.state?.semanticState === "needs_input").length;
 			const working = rows.filter((r) => r.alive).length;
@@ -63,5 +66,21 @@ export default function piAgentView(pi: ExtensionAPI): void {
 			}
 		}
 	});
-	pi.on("agent_end", async (_event, ctx) => updateStatus(ctx));
+	const syncForeground = (event: unknown, ctx: ExtensionContext) => {
+		try {
+			serviceFor(ctx).syncForegroundEvent(ctx.sessionManager.getSessionFile(), event);
+			updateStatus(ctx);
+		} catch {
+			/* never break the session over dashboard mirroring */
+		}
+	};
+
+	pi.on("input", async (event, ctx) => syncForeground(event, ctx));
+	pi.on("before_agent_start", async (event, ctx) => syncForeground(event, ctx));
+	pi.on("agent_start", async (event, ctx) => syncForeground(event, ctx));
+	pi.on("tool_execution_start", async (event, ctx) => syncForeground(event, ctx));
+	pi.on("tool_execution_end", async (event, ctx) => syncForeground(event, ctx));
+	pi.on("message_start", async (event, ctx) => syncForeground(event, ctx));
+	pi.on("message_end", async (event, ctx) => syncForeground(event, ctx));
+	pi.on("agent_end", async (event, ctx) => syncForeground(event, ctx));
 }

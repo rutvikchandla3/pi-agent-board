@@ -137,6 +137,10 @@ export function loadRow(root, viewId) {
 		const pid = readPid(root, viewId, state.currentRunId);
 		alive = isAlive(pid);
 	}
+	// A managed session can also be active in the foreground after the user attaches
+	// and types a follow-up. In that path there is no detached runner pid for us to
+	// poll, but foreground extension events mirror processState into state.json.
+	if (!alive && state?.processState === "alive") alive = true;
 	return { meta, state, alive };
 }
 

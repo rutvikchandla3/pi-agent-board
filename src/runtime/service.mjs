@@ -4,7 +4,8 @@
  * safety rule. Pure node + core modules; the Pi-coupled bits (attach, dialogs) live in
  * the command handler. The pi invocation + runner path are injected (resolved in index.ts).
  */
-import { projectViewState } from "../core/events.mjs";
+import { resolve } from "node:path";
+import { finalizeRun, projectViewState, reduceEvent } from "../core/events.mjs";
 import { newRunId, newViewId, slugifyTask } from "../core/ids.mjs";
 import { launchRun } from "../core/launch.mjs";
 import { gitRepoRoot } from "../core/repo.mjs";
@@ -109,6 +110,62 @@ export function createService(opts) {
 		return listRows(root).filter(
 			(r) => r.alive && r.meta.writeCapable && r.meta.worktreeMode !== "worktree" && r.meta.repoRoot === repoRoot,
 		);
+	}
+
+	/** @param {string} a @param {string} b */
+	function samePath(a, b) {
+		return resolve(a) === resolve(b);
+	}
+
+	/**
+	 * @param {import("../core/store.mjs").Row} row
+	 * @returns {import("../core/types.mjs").RunStatus}
+	 */
+	function statusFromRow(row) {
+		const now = Date.now();
+		const s = row.state ?? blankState(row.meta.id);
+		return {
+			version: 1,
+			runId: s.currentRunId ?? "foreground",
+			viewId: row.meta.id,
+			pid: null,
+			startedAt: s.lastActivityAt ?? now,
+			endedAt: null,
+			exitCode: null,
+			kind: "reply",
+			prompt: "",
+			model: row.meta.defaultModel ?? null,
+			semanticState: s.semanticState,
+			processState: s.processState,
+			summary: s.summary,
+			lastActivityAt: s.lastActivityAt,
+			currentTool: s.latestTool ? { name: s.latestTool.name, path: s.latestTool.path, summary: s.summary } : null,
+			latestAssistantPreview: s.latestAssistantPreview,
+			question: s.question,
+			error: s.error,
+			stopReason: null,
+			stoppedByUser: false,
+			turns: 0,
+			toolCount: 0,
+		};
+	}
+
+	/**
+	 * @param {import("../core/store.mjs").Row} row
+	 * @param {import("../core/types.mjs").RunStatus} status
+	 */
+	function writeForegroundState(row, status) {
+		const projected = projectViewState(status, Date.now());
+		// Foreground turns are driven by the interactive Pi process, not a detached
+		// runner, so keep currentRunId null. This prevents reconcile()/stop() from
+		// treating a foreground turn as a managed background runner pid.
+		projected.currentRunId = null;
+		writeState(root, projected);
+	}
+
+	/** @param {string} sessionFile */
+	function rowForSession(sessionFile) {
+		return listRows(root).find((r) => samePath(r.meta.sessionFile, sessionFile)) ?? null;
 	}
 
 	return {
@@ -268,6 +325,47 @@ export function createService(opts) {
 				fixed += 1;
 			}
 			return fixed;
+		},
+
+		/**
+		 * Mirror lifecycle/events from a managed session that is currently attached in
+		 * the foreground. Without this, a row that was completed/needs_input can keep
+		 * looking stale after the user types a follow-up in the real Pi session.
+		 * @param {string|undefined} sessionFile
+		 * @param {any} event
+		 * @returns {boolean} whether a managed row was updated
+		 */
+		syncForegroundEvent(sessionFile, event) {
+			if (!sessionFile || !event?.type) return false;
+			const row = rowForSession(sessionFile);
+			if (!row) return false;
+			const now = Date.now();
+			const status = statusFromRow(row);
+
+			if (event.type === "input" || event.type === "before_agent_start" || event.type === "agent_start") {
+				status.semanticState = "working";
+				status.processState = "alive";
+				status.currentTool = null;
+				status.question = null;
+				status.error = null;
+				status.summary = "Working…";
+				status.lastActivityAt = now;
+				writeForegroundState(row, status);
+				return true;
+			}
+
+			if (event.type === "agent_end") {
+				finalizeRun(status, { exitCode: 0 }, now);
+				writeForegroundState(row, status);
+				return true;
+			}
+
+			if (reduceEvent(status, event, now)) {
+				status.processState = "alive";
+				writeForegroundState(row, status);
+				return true;
+			}
+			return false;
 		},
 
 		/** @returns {import("../core/store.mjs").Row[]} all visible rows. */

@@ -79,6 +79,23 @@ test("listRows excludes archived by default", () => {
 	}
 });
 
+test("loadRow treats foreground-mirrored processState as alive without a pid", () => {
+	const root = freshRoot();
+	try {
+		createView(root, { id: "v1", name: "a", cwd: "/r" });
+		const state = readState(root, "v1");
+		state.currentRunId = null;
+		state.semanticState = "working";
+		state.processState = "alive";
+		writeState(root, state);
+
+		const row = loadRow(root, "v1");
+		assert.equal(row.alive, true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("status round-trips and loadRow reflects state", () => {
 	const root = freshRoot();
 	try {
