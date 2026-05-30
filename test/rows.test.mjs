@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { filterRows, groupRows, parseFilter, rowState, stateGlyph } from "../src/core/rows.mjs";
+import { filterRows, groupRows, parseFilter, rowState, rowView, stateGlyph } from "../src/core/rows.mjs";
 
 /** @returns {import("../src/core/store.mjs").Row} */
 function row(id, semanticState, extra = {}) {
@@ -43,6 +43,11 @@ test("groupRows sorts pinned first then recent", () => {
 	];
 	const [working] = groupRows(rows, 1000);
 	assert.deepEqual(working.rows.map((r) => r.id), ["c", "b", "a"]);
+});
+
+test("rowView exposes folder place for dashboard rows", () => {
+	assert.equal(rowView(row("a", "working", { repoCwd: "/Users/me/project-a" }), 0).place, "project-a");
+	assert.equal(rowView(row("b", "working", { repoCwd: "/Users/me/project-b", worktreeMode: "worktree" }), 0).place, "project-b⌥");
 });
 
 test("parseFilter splits state + terms", () => {

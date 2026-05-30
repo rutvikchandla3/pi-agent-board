@@ -575,11 +575,14 @@ export class DashboardComponent implements Component {
 		const badge = `${rv.pinned ? "★ " : ""}${rv.worktree ? "⌥ " : ""}`;
 		const ageRaw = ` ${rv.age}`;
 		const nameW = clamp(Math.floor(width * 0.34), 18, 30);
+		const folderW = width >= 72 ? clamp(Math.floor(width * 0.16), 10, 22) : width >= 56 ? 10 : 0;
 		const availableName = Math.max(8, nameW - visibleWidth(badge));
 		const nameText = `${badge}${truncate(rv.name, availableName)}`.padEnd(nameW);
-		const summaryW = Math.max(8, width - nameW - visibleWidth(ageRaw) - 4);
+		const folderText = folderW > 0 ? truncate(rv.place, folderW).padEnd(folderW) : "";
+		const folder = folderW > 0 ? ` ${t.fg("dim", folderText)}` : "";
+		const summaryW = Math.max(8, width - nameW - visibleWidth(folder) - visibleWidth(ageRaw) - 4);
 		const summary = truncate(rv.summary, summaryW);
-		let line = `${marker} ${t.fg(selected ? "accent" : "text", nameText)} ${t.fg(selected ? "text" : "muted", summary)}`;
+		let line = `${marker} ${t.fg(selected ? "accent" : "text", nameText)}${folder} ${t.fg(selected ? "text" : "muted", summary)}`;
 		line = padTo(line, width - visibleWidth(ageRaw));
 		line += t.fg("dim", ageRaw);
 		return clip(line, width);
