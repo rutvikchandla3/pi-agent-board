@@ -753,7 +753,7 @@ function renderAgentboardHeader(
 		if (filterQuery) summary += ` · filter:${filterQuery}`;
 		const raw = [
 			...blankLines(HEADER_TOP_PADDING),
-			clip(`${" ".repeat(HEADER_LEFT_PADDING)}${ansiFg(56, 189, 248, "◉")} ${ansiFg(248, 250, 252, theme.bold("PI Agentboard"))} ${ansiFg(148, 163, 184, AGENTBOARD_VERSION)}`, width),
+			clip(`${" ".repeat(HEADER_LEFT_PADDING)}${ansiFg(56, 189, 248, "◉")} ${ansiFg(248, 250, 252, theme.bold("AgentBoard"))} ${ansiFg(148, 163, 184, AGENTBOARD_VERSION)}`, width),
 			clip(ansiFg(filterQuery ? 251 : 148, filterQuery ? 191 : 163, filterQuery ? 36 : 184, summary), width),
 			...blankLines(HEADER_BOTTOM_PADDING),
 		];
@@ -773,7 +773,7 @@ function renderAgentboardHeader(
 }
 
 function headerTextRows(theme: ThemeLike, row: Row | null, counts: HeaderCounts, filterQuery: string, defaultCwd: string): string[] {
-	const title = `${ansiFg(248, 250, 252, theme.bold("PI Agentboard"))} ${ansiFg(148, 163, 184, AGENTBOARD_VERSION)}`;
+	const title = `${ansiFg(248, 250, 252, theme.bold("AgentBoard"))} ${ansiFg(148, 163, 184, AGENTBOARD_VERSION)}`;
 	const contextBits: string[] = [];
 	let contextPrefix = ansiFg(148, 163, 184, "Background Pi sessions");
 	if (row) {
