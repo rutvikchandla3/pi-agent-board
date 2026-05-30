@@ -11,6 +11,7 @@ import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/
 import { truncate } from "../core/heuristics.mjs";
 import { filterRows, groupRows, rowState, stateColor, stateGlyph } from "../core/rows.mjs";
 import { loadSessionView } from "../core/session-view.mjs";
+import { GROUP_LABELS } from "../core/types.mjs";
 import type { Row } from "../core/store.mjs";
 import type { createService } from "../runtime/service.mjs";
 
@@ -131,7 +132,8 @@ export class DashboardComponent implements Component {
 	private handleListKey(data: string): void {
 		if (matchesKey(data, Key.up)) return void this.moveSelection(-1);
 		if (matchesKey(data, Key.down)) return void this.moveSelection(1);
-		if (matchesKey(data, Key.right) || data === ">") return this.openSessionView();
+		if (matchesKey(data, Key.right) || data === ">") return this.attachSelected();
+		if (data === "v") return this.openSessionView();
 		if (matchesKey(data, Key.enter)) {
 			if (this.input.trim()) return this.submitDispatch();
 			return this.attachSelected();
@@ -171,7 +173,8 @@ export class DashboardComponent implements Component {
 
 	private handlePeekKey(data: string): void {
 		if (matchesKey(data, Key.escape)) return void (this.mode = "list");
-		if (matchesKey(data, Key.right) || data === ">") return this.openSessionView();
+		if (matchesKey(data, Key.right) || data === ">") return this.attachPeek();
+		if (data === "v") return this.openSessionView();
 		if (matchesKey(data, Key.up)) {
 			this.peekStep(-1);
 			return;
@@ -410,15 +413,10 @@ export class DashboardComponent implements Component {
 		const working = allRows.filter((r) => r.alive).length;
 		const completed = allRows.filter((r) => r.state?.semanticState === "completed").length;
 		const lines: string[] = [];
+		const focus = this.selectedRow() ?? allRows[0] ?? null;
 
-		// Header
-		lines.push(clip(t.fg("accent", t.bold("Agent View")), width));
-		lines.push(clip(t.fg("muted", displayPath(this.deps.defaultCwd)), width));
-		let summary = `${needs} awaiting input · ${working} working · ${completed} completed`;
-		if (this.filterQuery) summary += ` · filter:${this.filterQuery}`;
-		lines.push(clip(t.fg(this.filterQuery ? "warning" : "dim", summary), width));
+		lines.push(...this.renderOverview(width, focus, { needs, working, completed }));
 		if (this.flash) lines.push(clip(t.fg(flashColor(this.flash.level), this.flash.text), width));
-		lines.push(t.fg("dim", "─".repeat(width)));
 
 		if (this.mode === "help") return lines.concat(this.renderHelp(width));
 		if (this.mode === "peek" || this.mode === "reply") return lines.concat(this.renderPeek(width));
@@ -429,6 +427,11 @@ export class DashboardComponent implements Component {
 		const body = this.renderRows(width);
 		const windowed = this.windowBody(body, capacity);
 		lines.push(...windowed.lines);
+		// Keep the compose box visually docked to the bottom instead of glued to the
+		// final session row. This matches the Claude-style layout: list at top,
+		// large calm workspace, input/footer at bottom.
+		const spacer = Math.max(0, capacity - windowed.lines.length);
+		for (let i = 0; i < spacer; i++) lines.push("");
 
 		// Footer / input
 		lines.push(t.fg("dim", "─".repeat(width)));
@@ -449,12 +452,40 @@ export class DashboardComponent implements Component {
 		return lines;
 	}
 
+	private renderOverview(
+		width: number,
+		row: Row | null,
+		counts: { needs: number; working: number; completed: number },
+	): string[] {
+		const t = this.theme;
+		const out: string[] = [];
+		if (!row) {
+			out.push(clip(`${t.fg("accent", "◉")} ${t.bold("Pi Agent View")}`, width));
+			out.push(clip(t.fg("muted", `Background Pi sessions · ${displayPath(this.deps.defaultCwd)}`), width));
+		} else {
+			const state = rowState(row);
+			out.push(clip(`${t.fg(stateColor(state), stateGlyph(state, row.alive))} ${t.fg("accent", t.bold(row.meta.name))}`, width));
+			const metaBits: string[] = [];
+			if (row.meta.defaultModel) metaBits.push(row.meta.defaultModel);
+			metaBits.push(GROUP_LABELS[state]);
+			if (row.alive) metaBits.push("live");
+			if (row.meta.worktreeMode === "worktree") metaBits.push("worktree");
+			metaBits.push(displayPath(row.meta.repoCwd || row.meta.cwd));
+			out.push(clip(t.fg("muted", metaBits.join(" · ")), width));
+		}
+		let summary = `${counts.needs} awaiting input · ${counts.working} working · ${counts.completed} completed`;
+		if (this.filterQuery) summary += ` · filter:${this.filterQuery}`;
+		out.push(clip(t.fg(this.filterQuery ? "warning" : "dim", summary), width));
+		out.push("");
+		return out;
+	}
+
 	private listHints(): string {
 		const t = this.theme;
-		return t.fg(
-			"dim",
-			`enter create${this.input.trim() ? "" : "/attach"} · tab worktree:${this.worktreeNext ? "on" : "off"} · ↑↓ move · →/> session · ctrl+r rename · ctrl+t pin · ctrl+s stop · ctrl+x del · / filter · ? help`,
-		);
+		const primary = this.input.trim() ? "enter dispatch" : "enter attach";
+		const hints = [primary, "→ attach", "space peek", "v transcript", "ctrl+r rename", "ctrl+x delete", "/ filter", "? help"];
+		if (this.input.trim() || this.worktreeNext) hints.splice(1, 0, `tab worktree:${this.worktreeNext ? "on" : "off"}`);
+		return t.fg("dim", hints.join(" · "));
 	}
 
 	private taskInputLine(width: number): string {
@@ -474,7 +505,8 @@ export class DashboardComponent implements Component {
 		const groups = groupRows(this.rows, now);
 		const out: string[] = [];
 		for (const g of groups) {
-			out.push(t.fg(stateColor(g.state), `▌ ${g.label} (${g.rows.length})`));
+			if (out.length > 0) out.push("");
+			out.push(clip(`${t.fg(stateColor(g.state), g.label)}${t.fg("dim", ` · ${g.rows.length}`)}`, width));
 			for (const rv of g.rows) {
 				out.push(this.renderRow(rv, width));
 			}
@@ -485,17 +517,17 @@ export class DashboardComponent implements Component {
 	private renderRow(rv: ReturnType<typeof import("../core/rows.mjs")["rowView"]>, width: number): string {
 		const t = this.theme;
 		const selected = rv.id === this.selectedId;
-		const glyph = t.fg(stateColor(rv.state), stateGlyph(rv.state, rv.alive));
-		const pin = rv.pinned ? t.fg("warning", "★") : " ";
-		const name = truncate(rv.name, 22).padEnd(22);
-		const meta = ` ${rv.age.padStart(3)} ${truncate(rv.place, 14)}`;
-		const metaW = visibleWidth(meta) + 4;
-		const summaryW = Math.max(8, width - 22 - metaW - 4);
+		const marker = selected ? t.fg("accent", "›") : t.fg(stateColor(rv.state), "·");
+		const badge = `${rv.pinned ? "★ " : ""}${rv.worktree ? "⌥ " : ""}`;
+		const ageRaw = ` ${rv.age}`;
+		const nameW = clamp(Math.floor(width * 0.34), 18, 30);
+		const availableName = Math.max(8, nameW - visibleWidth(badge));
+		const nameText = `${badge}${truncate(rv.name, availableName)}`.padEnd(nameW);
+		const summaryW = Math.max(8, width - nameW - visibleWidth(ageRaw) - 4);
 		const summary = truncate(rv.summary, summaryW);
-		const prefix = selected ? t.fg("accent", "›") : " ";
-		let line = `${prefix}${pin}${glyph} ${t.fg(selected ? "accent" : "text", name)} ${t.fg("muted", summary)}`;
-		line = padTo(line, width - visibleWidth(meta) - 1);
-		line += t.fg("dim", meta);
+		let line = `${marker} ${t.fg(selected ? "accent" : "text", nameText)} ${t.fg(selected ? "text" : "muted", summary)}`;
+		line = padTo(line, width - visibleWidth(ageRaw));
+		line += t.fg("dim", ageRaw);
 		return clip(line, width);
 	}
 
@@ -528,7 +560,7 @@ export class DashboardComponent implements Component {
 			out.push(clip(`${t.fg("accent", "reply› ")}${this.input}${cursor()}`, width));
 			out.push(clip(t.fg("dim", "enter send · esc back"), width));
 		} else {
-			out.push(clip(t.fg("dim", "↑↓ prev/next · →/> session view · r reply · a attach · esc back"), width));
+			out.push(clip(t.fg("dim", "↑↓ prev/next · →/> attach · v transcript · r reply · esc back"), width));
 		}
 		return out;
 	}
@@ -589,12 +621,13 @@ export class DashboardComponent implements Component {
 			["type + enter", "Create a new Pi session from the input box"],
 			["enter", "Attach to selected session when input is empty"],
 			["↑/↓", "Move selection"],
-			["→ or >", "Open selected session in full-screen session view"],
+			["→ or >", "Attach to the selected real Pi session"],
 			["space", "Peek when input is empty; otherwise inserts a space"],
 			["tab", "Toggle worktree for the next dispatch"],
 			["/", "Filter (s:<state> or free text)"],
 			["ctrl+r/t/s/x", "Rename · pin · stop · delete"],
-			["In peek", "→ session view · r reply · a attach · ↑↓ adjacent"],
+			["v", "Open read-only transcript view"],
+			["In peek", "→ attach · v transcript · r reply · ↑↓ adjacent"],
 			["In session", "← back · ↑↓ scroll · enter attach · r reply"],
 			["esc", "Clear input; if empty, quit standalone dashboard"],
 		];
@@ -683,6 +716,10 @@ function displayPath(path: string): string {
 	const home = process.env.HOME;
 	if (home && path.startsWith(home)) return `~${path.slice(home.length)}` || "~";
 	return path;
+}
+
+function clamp(n: number, min: number, max: number): number {
+	return Math.max(min, Math.min(max, n));
 }
 
 function flashColor(level: "info" | "warning" | "error"): string {

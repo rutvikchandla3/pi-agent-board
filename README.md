@@ -12,7 +12,7 @@ Built on Pi's public extension/session/TUI APIs. Implements `PRD.md` / `IMPLEMEN
 ```bash
 npm install                 # dev-only: typescript + @types/node (runtime uses pi's own deps)
 ln -s "$(pwd)" ~/.pi/agent/extensions/agent-view    # install (auto-discovered)
-pi                          # then type /agents  (or press Ctrl+G)
+pi                          # then type /agents
 pi --agent-view             # launch straight into the dashboard UI
 ```
 
@@ -28,10 +28,10 @@ pi --agent-view             # launch straight into the dashboard UI
 - **Live rows** grouped by state: Needs input · Working · Queued · Failed · Completed · Idle · Stopped.
 - **Peek** (`space`) a row for its summary, blocker/question, and latest output; **reply** (`r`)
   inline without attaching.
-- **Session view** (`→` / `>`) opens a full-screen live transcript view for the selected session
-  without interrupting it; **back** with (`←` / `<`).
-- **Attach** (`enter`) to continue the full interactive session (confirms + interrupts if it's
-  still running); `/agents` returns you to the dashboard.
+- **Attach** (`enter` or `→` / `>`) to continue the full interactive Pi session (confirms + interrupts if it's
+  still running); `←` from an empty attached-session input returns to the dashboard (`/agents` works too).
+- **Transcript view** (`v`) opens a full-screen read-only live transcript without interrupting it;
+  **back** with (`←` / `<`).
 - **Manage:** rename (`ctrl+r`), pin (`ctrl+t`), stop (`ctrl+s`), delete (`ctrl+x`, archives row & keeps the session),
   filter (`/`, supports `s:<state>` + free text), help (`?`).
 - **Durable & resumable:** survives `/reload` and pi restart; reconciles runs whose monitor died.

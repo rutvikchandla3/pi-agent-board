@@ -24,9 +24,12 @@ Status legend: ☐ todo · ◐ in progress · ☑ done
 ## Checkpoint log
 
 ### CP3 — 2026-05-30 — standalone-ish dashboard UX
-- Added a full-screen **session view** inside `/agents`: **→ / >** opens the selected row's
+- Added a full-screen **session view** inside `/agents`: **v** opens the selected row's
   live transcript from its managed session file without interrupting the worker; **← / <**
-  returns to the dashboard. This preserves the safe attach semantics on **enter**.
+  returns to the dashboard. **→ / >** now attaches to the real Pi session, matching the
+  primary agent-view navigation expectation. **enter** also attaches. In an attached managed
+  session, **←** from an empty input reopens agent view directly using the command-capable
+  replacement context (no slash-command text injection).
 - Added `src/core/session-view.mjs` to parse managed Pi session JSONL files and project the
   active branch into a readable transcript surface (messages, visible custom messages,
   compactions, branch summaries).
@@ -44,7 +47,7 @@ Status legend: ☐ todo · ◐ in progress · ☑ done
   archive/reconcile + same-repo worktree safety), `src/ui/dashboard.ts` (one `ctx.ui.custom`
   component: list/peek/reply/dispatch/filter/rename/confirm/help modes, live 700ms poll, scroll),
   `src/commands/agents.ts` (`/agents` command + action loop + attach via `ctx.switchSession`),
-  `src/index.ts` (entry: command, Ctrl+G shortcut, footer status, session_start recovery),
+  `src/index.ts` (entry: command, footer status, session_start recovery),
   root `index.ts` (re-export for auto-discovery).
 - **`npx tsc --noEmit` = 0 errors** against the real Pi `.d.ts` (path-mapped). **45/45 tests pass.**
 - **Smoke: `pi --list-models -e src/index.ts` loads the extension cleanly** (factory + all imports

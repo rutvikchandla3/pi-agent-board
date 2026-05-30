@@ -1,13 +1,12 @@
 /**
  * Pi Agent View — extension entry point.
  *
- * Registers the `/agents` dashboard command (+ an optional shortcut), resolves how to
+ * Registers the `/agents` dashboard command, resolves how to
  * launch background workers and the detached runner, and keeps a small footer status with
  * the count of sessions needing attention. See docs/EXPLORATION.md for the design.
  */
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Key } from "@earendil-works/pi-tui";
 import { resolvePiInvocation } from "./core/invocation.mjs";
 import { defaultRoot } from "./core/paths.mjs";
 import { listRows } from "./core/store.mjs";
@@ -25,15 +24,6 @@ export default function piAgentView(pi: ExtensionAPI): void {
 		description: "Open the agent-view dashboard on startup",
 		type: "boolean",
 		default: false,
-	});
-
-	// Convenience shortcut: route to the /agents command (so attach/session-switch run in a
-	// command context). Ctrl+G = "go to agents".
-	pi.registerShortcut(Key.ctrl("g"), {
-		description: "Open the agent-view dashboard",
-		handler: async () => {
-			pi.sendUserMessage("/agents");
-		},
 	});
 
 	// Footer status: reconcile stale rows and surface how many need attention.
@@ -67,10 +57,7 @@ export default function piAgentView(pi: ExtensionAPI): void {
 			ctx.ui.setTitle("agent view");
 			const result = await openDashboard(ctx, service);
 			if (result.action === "attach") {
-				const suffix = result.stopFirst ? " --stop" : "";
-				setTimeout(() => {
-					pi.sendUserMessage(`/agents --attach ${result.viewId}${suffix}`);
-				}, 0).unref?.();
+				ctx.ui.notify("Attach requires the /agents command path; launch from a normal Pi session for now.", "warning");
 			} else {
 				ctx.shutdown();
 			}

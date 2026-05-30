@@ -4,7 +4,9 @@
  * current session). Also wires dispatch+attach and stale-row recovery on open.
  */
 import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { createService } from "../runtime/service.mjs";
 import { DashboardComponent, type DashboardResult } from "../ui/dashboard.js";
 
@@ -58,32 +60,42 @@ export function registerAgentsCommand(pi: ExtensionAPI, opts: AgentsCommandOptio
 	});
 }
 
-export function openDashboard(
+export async function openDashboard(
 	ctx: Pick<ExtensionCommandContext, "ui" | "cwd">,
 	service: ReturnType<typeof createService>,
 ): Promise<DashboardResult> {
-	return ctx.ui.custom<DashboardResult>((tui, theme, keybindings, done) => {
-		let interval: ReturnType<typeof setInterval> | null = null;
-		const wrappedDone = (result: DashboardResult) => {
-			if (interval) clearInterval(interval);
-			interval = null;
-			done(result);
-		};
-		const comp = new DashboardComponent(tui, theme as never, keybindings, wrappedDone, {
-			service,
-			defaultCwd: ctx.cwd,
+	ctx.ui.setWorkingVisible(false);
+	ctx.ui.setHeader(() => ({ render: () => [], invalidate() {} }));
+	ctx.ui.setFooter(() => ({ render: () => [], invalidate() {} }));
+	ctx.ui.setTitle("agent-view");
+	try {
+		return await ctx.ui.custom<DashboardResult>((tui, theme, keybindings, done) => {
+			let interval: ReturnType<typeof setInterval> | null = null;
+			const wrappedDone = (result: DashboardResult) => {
+				if (interval) clearInterval(interval);
+				interval = null;
+				done(result);
+			};
+			const comp = new DashboardComponent(tui, theme as never, keybindings, wrappedDone, {
+				service,
+				defaultCwd: ctx.cwd,
+			});
+			interval = setInterval(() => {
+				comp.refresh();
+				tui.requestRender();
+			}, POLL_MS);
+			const withDispose = comp as DashboardComponent & { dispose: () => void };
+			withDispose.dispose = () => {
+				if (interval) clearInterval(interval);
+				interval = null;
+			};
+			return comp;
 		});
-		interval = setInterval(() => {
-			comp.refresh();
-			tui.requestRender();
-		}, POLL_MS);
-		const withDispose = comp as DashboardComponent & { dispose: () => void };
-		withDispose.dispose = () => {
-			if (interval) clearInterval(interval);
-			interval = null;
-		};
-		return comp;
-	});
+	} finally {
+		ctx.ui.setHeader(undefined);
+		ctx.ui.setFooter(undefined);
+		ctx.ui.setWorkingVisible(true);
+	}
 }
 
 async function attach(
@@ -109,8 +121,43 @@ async function attach(
 	const name = row.meta.name;
 	const result = await ctx.switchSession(row.meta.sessionFile, {
 		withSession: async (replaced) => {
-			replaced.ui.notify(`Attached to "${name}". Run /agents to return to the dashboard.`, "info");
+			replaced.ui.notify(`Attached to "${name}". Press ← on empty input to return to agent view.`, "info");
+			installBackToDashboard(replaced, service);
 		},
 	});
 	if (result.cancelled) ctx.ui.notify("Attach cancelled.", "warning");
+}
+
+function installBackToDashboard(ctx: ExtensionCommandContext, service: ReturnType<typeof createService>): void {
+	ctx.ui.setStatus("agent-view.back", ctx.ui.theme.fg("muted", "← agents"));
+	let opening = false;
+	ctx.ui.onTerminalInput((data: string) => {
+		if (opening || !matchesKey(data, Key.left)) return undefined;
+		// Do not steal normal cursor-left while the user is composing a message.
+		if (ctx.ui.getEditorText().length > 0) return undefined;
+		opening = true;
+		void (async () => {
+			try {
+				service.reconcile();
+				const result = await openDashboard(ctx, service);
+				if (result.action !== "attach") return;
+				const target = service.row(result.viewId);
+				const currentSessionFile = ctx.sessionManager.getSessionFile();
+				if (target && currentSessionFile && samePath(target.meta.sessionFile, currentSessionFile)) {
+					ctx.ui.notify("Already attached to this session.", "info");
+					return;
+				}
+				await attach(ctx, service, result.viewId, result.stopFirst);
+			} catch (err) {
+				ctx.ui.notify(`Couldn't open agent view: ${err instanceof Error ? err.message : String(err)}`, "error");
+			} finally {
+				opening = false;
+			}
+		})();
+		return { consume: true };
+	});
+}
+
+function samePath(a: string, b: string): boolean {
+	return resolve(a) === resolve(b);
 }
