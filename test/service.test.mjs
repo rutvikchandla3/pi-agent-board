@@ -21,6 +21,32 @@ function service(root) {
 	});
 }
 
+test("archiveByState archives inactive rows and skips live rows", () => {
+	const root = freshRoot();
+	try {
+		createView(root, { id: "done1", name: "done1", cwd: "/r" });
+		createView(root, { id: "done2", name: "done2", cwd: "/r" });
+		createView(root, { id: "work1", name: "work1", cwd: "/r" });
+		for (const id of ["done1", "done2"]) {
+			const s = readState(root, id);
+			s.semanticState = "completed";
+			s.processState = "exited";
+			writeState(root, s);
+		}
+		const live = readState(root, "work1");
+		live.semanticState = "working";
+		live.processState = "alive";
+		writeState(root, live);
+
+		assert.deepEqual(service(root).archiveByState("completed"), { ok: true, archived: 2, skipped: 0 });
+		assert.deepEqual(service(root).rows().map((r) => r.meta.id), ["work1"]);
+		assert.deepEqual(service(root).archiveByState("working"), { ok: true, archived: 0, skipped: 1 });
+		assert.deepEqual(service(root).rows().map((r) => r.meta.id), ["work1"]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("syncForegroundEvent marks a managed attached session working when user inputs", () => {
 	const root = freshRoot();
 	try {

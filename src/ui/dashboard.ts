@@ -128,7 +128,15 @@ export class DashboardComponent implements Component {
 				this.mode = "list";
 				break;
 		}
-		this.tui.requestRender();
+		this.requestFullRender();
+	}
+
+	private requestFullRender(): void {
+		// The dashboard replaces the user's whole mental screen, but Pi's custom UI
+		// renderer is still embedded in the interactive TUI/scrollback. Differential
+		// redraw can append repeated dashboard snapshots when the viewport/cursor has
+		// drifted (notably on ↑/↓). Force a clear+home redraw for dashboard updates.
+		this.tui.requestRender(true);
 	}
 
 	private handleListKey(data: string): void {
@@ -155,6 +163,7 @@ export class DashboardComponent implements Component {
 		if (matchesKey(data, Key.ctrl("t"))) return this.togglePin();
 		if (matchesKey(data, Key.ctrl("s"))) return this.stopSelected();
 		if (matchesKey(data, Key.ctrl("x"))) return this.confirmDelete();
+		if (data === "X") return this.confirmDeleteState();
 		if (matchesKey(data, Key.backspace) || data === "\x7f") {
 			this.input = this.input.slice(0, -1);
 			return;
@@ -354,6 +363,26 @@ export class DashboardComponent implements Component {
 		this.mode = "confirm";
 	}
 
+	private confirmDeleteState(): void {
+		const row = this.selectedRow();
+		if (!row) return;
+		const state = rowState(row);
+		const matching = this.deps.service.rows().filter((r) => rowState(r) === state);
+		const deletable = matching.filter((r) => !r.alive).length;
+		const skipped = matching.length - deletable;
+		if (deletable === 0) return this.notice(`No inactive ${GROUP_LABELS[state].toLowerCase()} sessions to delete`, "warning");
+		this.pending = {
+			prompt: `Delete ${deletable} ${GROUP_LABELS[state].toLowerCase()} session${deletable === 1 ? "" : "s"}?${skipped ? ` ${skipped} live skipped.` : ""} (y/N)`,
+			onYes: () => {
+				const res = this.deps.service.archiveByState(state);
+				if (!res.ok) this.notice(res.error ?? "Delete failed", "error");
+				else this.notice(`Deleted ${res.archived}${res.skipped ? ` · skipped ${res.skipped} live` : ""}`, "info");
+				this.refresh();
+			},
+		};
+		this.mode = "confirm";
+	}
+
 	private openPeek(): void {
 		if (!this.selectedId) return;
 		this.peekId = this.selectedId;
@@ -420,9 +449,9 @@ export class DashboardComponent implements Component {
 		lines.push(...this.renderOverview(width, focus, { needs, working, completed }));
 		if (this.flash) lines.push(clip(t.fg(flashColor(this.flash.level), this.flash.text), width));
 
-		if (this.mode === "help") return lines.concat(this.renderHelp(width));
-		if (this.mode === "peek" || this.mode === "reply") return lines.concat(this.renderPeek(width));
-		if (this.mode === "session") return lines.concat(this.renderSession(width));
+		if (this.mode === "help") return this.fitToHeight(lines.concat(this.renderHelp(width)), width);
+		if (this.mode === "peek" || this.mode === "reply") return this.fitToHeight(lines.concat(this.renderPeek(width)), width);
+		if (this.mode === "session") return this.fitToHeight(lines.concat(this.renderSession(width)), width);
 
 		// Body: grouped rows with a scroll viewport.
 		const capacity = Math.max(3, (this.tui.terminal?.rows ?? 24) - lines.length - 3);
@@ -451,7 +480,14 @@ export class DashboardComponent implements Component {
 		} else {
 			lines.push(clip(this.listHints(), width));
 		}
-		return lines;
+		return this.fitToHeight(lines, width);
+	}
+
+	private fitToHeight(lines: string[], width: number): string[] {
+		const height = this.tui.terminal?.rows ?? 24;
+		const out = lines.slice(0, height).map((l) => clip(l, width));
+		while (out.length < height) out.push("");
+		return out;
 	}
 
 	private renderOverview(
@@ -485,7 +521,7 @@ export class DashboardComponent implements Component {
 	private listHints(): string {
 		const t = this.theme;
 		const primary = this.input.trim() ? "enter dispatch" : "enter attach";
-		const hints = [primary, "→ attach", "space peek", "v transcript", "ctrl+r rename", "ctrl+x delete", "/ filter", "? help"];
+		const hints = [primary, "→ attach", "space peek", "v transcript", "ctrl+r rename", "ctrl+x delete", "X delete state", "/ filter", "? help"];
 		if (this.input.trim() || this.worktreeNext) hints.splice(1, 0, `tab worktree:${this.worktreeNext ? "on" : "off"}`);
 		return t.fg("dim", hints.join(" · "));
 	}
@@ -627,7 +663,8 @@ export class DashboardComponent implements Component {
 			["space", "Peek when input is empty; otherwise inserts a space"],
 			["tab", "Toggle worktree for the next dispatch"],
 			["/", "Filter (s:<state> or free text)"],
-			["ctrl+r/t/s/x", "Rename · pin · stop · delete"],
+			["ctrl+r/t/s/x", "Rename · pin · stop · delete selected"],
+			["X", "Delete all inactive sessions in selected state"],
 			["v", "Open read-only transcript view"],
 			["In peek", "→ attach · v transcript · r reply · ↑↓ adjacent"],
 			["In session", "← back · ↑↓ scroll · enter attach · r reply"],

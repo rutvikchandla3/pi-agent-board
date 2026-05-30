@@ -32,8 +32,8 @@ pi --agent-view             # launch straight into the dashboard UI
   still running); `←` from an empty attached-session input returns to the dashboard (`/agents` works too).
 - **Transcript view** (`v`) opens a full-screen read-only live transcript without interrupting it;
   **back** with (`←` / `<`).
-- **Manage:** rename (`ctrl+r`), pin (`ctrl+t`), stop (`ctrl+s`), delete (`ctrl+x`, archives row & keeps the session),
-  filter (`/`, supports `s:<state>` + free text), help (`?`).
+- **Manage:** rename (`ctrl+r`), pin (`ctrl+t`), stop (`ctrl+s`), delete selected (`ctrl+x`, archives row & keeps the session),
+  delete all inactive rows in the selected state (`X`), filter (`/`, supports `s:<state>` + free text), help (`?`).
 - **Durable & resumable:** survives `/reload` and pi restart; reconciles runs whose monitor died.
 - **Safe parallelism:** same-repo parallel writers are auto-isolated into git worktrees.
 

@@ -296,6 +296,28 @@ export function createService(opts) {
 		},
 
 		/**
+		 * Archive every non-live visible row in a semantic state. Live rows are skipped
+		 * so bulk cleanup cannot accidentally kill work.
+		 * @param {import("../core/types.mjs").SemanticState} state
+		 * @returns {{ ok: boolean, archived: number, skipped: number, error?: string }}
+		 */
+		archiveByState(state) {
+			let archived = 0;
+			let skipped = 0;
+			for (const row of listRows(root)) {
+				if (row.state?.semanticState !== state) continue;
+				if (row.alive) {
+					skipped += 1;
+					continue;
+				}
+				row.meta.archived = true;
+				writeMeta(root, row.meta);
+				archived += 1;
+			}
+			return { ok: true, archived, skipped };
+		},
+
+		/**
 		 * Recovery: reconcile rows whose runner died without finalizing (e.g. machine crash
 		 * or the runner was killed). If a terminal status exists, project it; otherwise mark
 		 * the row failed/stale. Safe to call on every dashboard open and on session_start.

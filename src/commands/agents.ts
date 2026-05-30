@@ -70,29 +70,35 @@ export async function openDashboard(
 	ctx.ui.setFooter(() => ({ render: () => [], invalidate() {} }));
 	ctx.ui.setTitle("agent-view");
 	try {
-		return await ctx.ui.custom<DashboardResult>((tui, theme, keybindings, done) => {
-			let interval: ReturnType<typeof setInterval> | null = null;
-			const wrappedDone = (result: DashboardResult) => {
-				if (interval) clearInterval(interval);
-				interval = null;
-				done(result);
-			};
-			const comp = new DashboardComponent(tui, theme as never, keybindings, wrappedDone, {
-				service,
-				defaultCwd: ctx.cwd,
-				initialSelectedId: options.initialSelectedId,
-			});
-			interval = setInterval(() => {
-				comp.refresh();
-				tui.requestRender();
-			}, POLL_MS);
-			const withDispose = comp as DashboardComponent & { dispose: () => void };
-			withDispose.dispose = () => {
-				if (interval) clearInterval(interval);
-				interval = null;
-			};
-			return comp;
-		});
+		return await ctx.ui.custom<DashboardResult>(
+			(tui, theme, keybindings, done) => {
+				let interval: ReturnType<typeof setInterval> | null = null;
+				const wrappedDone = (result: DashboardResult) => {
+					if (interval) clearInterval(interval);
+					interval = null;
+					done(result);
+				};
+				const comp = new DashboardComponent(tui, theme as never, keybindings, wrappedDone, {
+					service,
+					defaultCwd: ctx.cwd,
+					initialSelectedId: options.initialSelectedId,
+				});
+				interval = setInterval(() => {
+					comp.refresh();
+					tui.requestRender(true);
+				}, POLL_MS);
+				const withDispose = comp as DashboardComponent & { dispose: () => void };
+				withDispose.dispose = () => {
+					if (interval) clearInterval(interval);
+					interval = null;
+				};
+				return comp;
+			},
+			{
+				overlay: true,
+				overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 },
+			},
+		);
 	} finally {
 		ctx.ui.setHeader(undefined);
 		ctx.ui.setFooter(undefined);
