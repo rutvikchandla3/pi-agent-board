@@ -522,27 +522,7 @@ export class DashboardComponent implements Component {
 		row: Row | null,
 		counts: { needs: number; working: number; completed: number },
 	): string[] {
-		const t = this.theme;
-		const out: string[] = [];
-		if (!row) {
-			out.push(clip(`${t.fg("accent", "◉")} ${t.bold("Pi Agent View")}`, width));
-			out.push(clip(t.fg("muted", `Background Pi sessions · ${displayPath(this.deps.defaultCwd)}`), width));
-		} else {
-			const state = rowState(row);
-			out.push(clip(`${t.fg(stateColor(state), stateGlyph(state, row.alive))} ${t.fg("accent", t.bold(row.meta.name))}`, width));
-			const metaBits: string[] = [];
-			if (row.meta.defaultModel) metaBits.push(row.meta.defaultModel);
-			metaBits.push(GROUP_LABELS[state]);
-			if (row.alive) metaBits.push("live");
-			if (row.meta.worktreeMode === "worktree") metaBits.push("worktree");
-			metaBits.push(displayPath(row.meta.repoCwd || row.meta.cwd));
-			out.push(clip(t.fg("muted", metaBits.join(" · ")), width));
-		}
-		let summary = `${counts.needs} awaiting input · ${counts.working} working · ${counts.completed} completed`;
-		if (this.filterQuery) summary += ` · filter:${this.filterQuery}`;
-		out.push(clip(t.fg(this.filterQuery ? "warning" : "dim", summary), width));
-		out.push("");
-		return out;
+		return renderAgentboardHeader(width, this.theme, row, counts, this.filterQuery, this.deps.defaultCwd);
 	}
 
 	private listHints(): string {
@@ -741,6 +721,110 @@ export class DashboardComponent implements Component {
 }
 
 // ---- helpers --------------------------------------------------------------
+
+const AGENTBOARD_VERSION = "v0.1.0";
+// ANSI rendering of /Users/rutvik/Downloads/pi-logo-on-dark.svg.
+// The SVG is a 4x4 grid mark: P-shaped left form plus a separate lower-right stem.
+const PI_ICON = [
+	"██████  ",
+	"██  ██  ",
+	"████  ██",
+	"██    ██",
+] as const;
+const PI_ICON_WIDTH = Math.max(...PI_ICON.map((line) => visibleWidth(line)));
+const HEADER_LEFT_PADDING = 2;
+const HEADER_TEXT_GAP = 4;
+const HEADER_TOP_PADDING = 1;
+const HEADER_BOTTOM_PADDING = 2;
+const AGENTBOARD_HEADER_MIN_WIDTH = HEADER_LEFT_PADDING + PI_ICON_WIDTH + HEADER_TEXT_GAP + 24;
+
+type HeaderCounts = { needs: number; working: number; completed: number };
+
+function renderAgentboardHeader(
+	width: number,
+	theme: ThemeLike,
+	row: Row | null,
+	counts: HeaderCounts,
+	filterQuery: string,
+	defaultCwd: string,
+): string[] {
+	if (width < AGENTBOARD_HEADER_MIN_WIDTH) {
+		let summary = `${counts.needs} awaiting · ${counts.working} working · ${counts.completed} done`;
+		if (filterQuery) summary += ` · filter:${filterQuery}`;
+		const raw = [
+			...blankLines(HEADER_TOP_PADDING),
+			clip(`${" ".repeat(HEADER_LEFT_PADDING)}${ansiFg(56, 189, 248, "◉")} ${ansiFg(248, 250, 252, theme.bold("PI Agentboard"))} ${ansiFg(148, 163, 184, AGENTBOARD_VERSION)}`, width),
+			clip(ansiFg(filterQuery ? 251 : 148, filterQuery ? 191 : 163, filterQuery ? 36 : 184, summary), width),
+			...blankLines(HEADER_BOTTOM_PADDING),
+		];
+		return raw.map((line, i) => headerBgLine(line, width, i));
+	}
+
+	const textRows = headerTextRows(theme, row, counts, filterQuery, defaultCwd);
+	const textStart = Math.max(0, Math.round((PI_ICON.length - textRows.length) / 2));
+	const raw = blankLines(HEADER_TOP_PADDING);
+	raw.push(
+		...PI_ICON.map((iconLine, i) =>
+			clip(`${" ".repeat(HEADER_LEFT_PADDING)}${renderPiIconLine(iconLine)}${" ".repeat(HEADER_TEXT_GAP)}${textRows[i - textStart] ?? ""}`, width),
+		),
+	);
+	raw.push(...blankLines(HEADER_BOTTOM_PADDING));
+	return raw.map((line, i) => headerBgLine(line, width, i));
+}
+
+function headerTextRows(theme: ThemeLike, row: Row | null, counts: HeaderCounts, filterQuery: string, defaultCwd: string): string[] {
+	const title = `${ansiFg(248, 250, 252, theme.bold("PI Agentboard"))} ${ansiFg(148, 163, 184, AGENTBOARD_VERSION)}`;
+	const contextBits: string[] = [];
+	let contextPrefix = ansiFg(148, 163, 184, "Background Pi sessions");
+	if (row) {
+		const state = rowState(row);
+		contextPrefix = `${ansiFg(148, 163, 184, stateGlyph(state, row.alive))} ${ansiFg(226, 232, 240, row.meta.name)}`;
+		if (row.meta.defaultModel) contextBits.push(row.meta.defaultModel);
+		contextBits.push(GROUP_LABELS[state]);
+		if (row.alive) contextBits.push("live");
+		if (row.meta.worktreeMode === "worktree") contextBits.push("worktree");
+	}
+	const path = displayPath(row ? row.meta.repoCwd || row.meta.cwd : defaultCwd);
+	contextBits.push(path);
+	let summary = `${counts.needs} awaiting input · ${counts.working} working · ${counts.completed} completed`;
+	if (filterQuery) summary += ` · filter:${filterQuery}`;
+	return [
+		title,
+		`${contextPrefix} ${ansiFg(100, 116, 139, contextBits.join(" · "))}`,
+		ansiFg(filterQuery ? 251 : 148, filterQuery ? 191 : 163, filterQuery ? 36 : 184, summary),
+	];
+}
+
+function renderPiIconLine(line: string): string {
+	return ansiFg(248, 250, 252, line);
+}
+
+function ansiFg(r: number, g: number, b: number, text: string): string {
+	return `\x1b[38;2;${r};${g};${b}m${text}\x1b[39m`;
+}
+
+function ansiBg(r: number, g: number, b: number): string {
+	return `\x1b[48;2;${r};${g};${b}m`;
+}
+
+function headerBgLine(content: string, width: number, row: number): string {
+	const clipped = clip(content, width);
+	const rest = Math.max(0, width - visibleWidth(clipped));
+	return `${ansiBg(15, 23, 42)}${clipped}${gridFill(row, width - rest, rest)}\x1b[49m`;
+}
+
+function gridFill(row: number, startCol: number, count: number): string {
+	let out = "";
+	for (let i = 0; i < count; i++) {
+		const col = startCol + i;
+		out += row % 2 === 0 && col % 4 === 0 ? ansiFg(51, 65, 85, "·") : " ";
+	}
+	return out;
+}
+
+function blankLines(count: number): string[] {
+	return Array.from({ length: count }, () => "");
+}
 
 function isPrintable(data: string): boolean {
 	if (data.length === 0) return false;
