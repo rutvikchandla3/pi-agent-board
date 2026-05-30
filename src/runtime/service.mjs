@@ -1,0 +1,283 @@
+/**
+ * AgentViewService — the imperative actions behind the dashboard: dispatch a new
+ * background session, reply/resume, stop, pin/rename/archive, and the same-repo write
+ * safety rule. Pure node + core modules; the Pi-coupled bits (attach, dialogs) live in
+ * the command handler. The pi invocation + runner path are injected (resolved in index.ts).
+ */
+import { projectViewState } from "../core/events.mjs";
+import { newRunId, newViewId, slugifyTask } from "../core/ids.mjs";
+import { launchRun } from "../core/launch.mjs";
+import { gitRepoRoot } from "../core/repo.mjs";
+import { killProcess } from "../core/pid.mjs";
+import * as P from "../core/paths.mjs";
+import {
+	createView,
+	listRows,
+	loadRow,
+	readPid,
+	readState,
+	readStatus,
+	writeMeta,
+	writeState,
+} from "../core/store.mjs";
+import { addWorktree, removeWorktree, worktreeBranch } from "../core/worktree.mjs";
+
+/** @typedef {import("../core/types.mjs").RunKind} RunKind */
+
+/**
+ * @param {{
+ *   root: string,
+ *   runnerScript: string,
+ *   piCommand: string,
+ *   piArgsPrefix: string[],
+ *   defaultCwd: string,
+ *   launch?: typeof launchRun,
+ * }} opts
+ */
+export function createService(opts) {
+	const root = opts.root;
+	const launch = opts.launch ?? launchRun;
+
+	/**
+	 * Launch a run (dispatch or reply) against an existing view, updating its state to queued.
+	 * @param {import("../core/types.mjs").ViewMeta} meta
+	 * @param {string} prompt
+	 * @param {RunKind} kind
+	 * @returns {{ runId: string, pid: number|null }}
+	 */
+	function launchForView(meta, prompt, kind) {
+		const runId = newRunId();
+		/** @type {import("../core/types.mjs").RunConfig} */
+		const config = {
+			root,
+			viewId: meta.id,
+			runId,
+			kind,
+			sessionFile: meta.sessionFile,
+			cwd: meta.cwd,
+			prompt,
+			piCommand: opts.piCommand,
+			piArgsPrefix: opts.piArgsPrefix,
+			model: meta.defaultModel ?? null,
+			tools: null,
+		};
+		const { pid } = launch(root, config, { runnerScript: opts.runnerScript });
+
+		// Reflect "queued/alive" immediately so the dashboard shows it before the runner writes.
+		const state = readState(root, meta.id) ?? blankState(meta.id);
+		state.currentRunId = runId;
+		state.semanticState = "queued";
+		state.processState = "alive";
+		state.summary = "Queued";
+		state.needsInput = false;
+		state.hasError = false;
+		state.question = null;
+		state.error = null;
+		state.lastActivityAt = Date.now();
+		state.updatedAt = Date.now();
+		writeState(root, state);
+		return { runId, pid };
+	}
+
+	/** @param {string} viewId @returns {import("../core/types.mjs").ViewState} */
+	function blankState(viewId) {
+		return {
+			version: 1,
+			viewId,
+			currentRunId: null,
+			semanticState: "queued",
+			processState: "exited",
+			summary: "Queued",
+			lastActivityAt: Date.now(),
+			updatedAt: Date.now(),
+			needsInput: false,
+			hasError: false,
+			latestAssistantPreview: "",
+			latestTool: null,
+			question: null,
+			error: null,
+		};
+	}
+
+	/**
+	 * Rows that are actively running a writer in the given repo (for the safety rule).
+	 * @param {string|null} repoRoot
+	 * @returns {import("../core/store.mjs").Row[]}
+	 */
+	function activeWritersInRepo(repoRoot) {
+		if (!repoRoot) return [];
+		return listRows(root).filter(
+			(r) => r.alive && r.meta.writeCapable && r.meta.worktreeMode !== "worktree" && r.meta.repoRoot === repoRoot,
+		);
+	}
+
+	return {
+		/**
+		 * Create a new background session and launch its first run.
+		 * Enforces worktree isolation for same-repo parallel writers (locked decision):
+		 * if another non-isolated writer is already active in this repo, we require a worktree.
+		 * @param {string} text
+		 * @param {{ cwd?: string, worktree?: boolean, writeCapable?: boolean }} [dispatchOpts]
+		 * @returns {{ ok: boolean, viewId?: string, error?: string, usedWorktree?: boolean }}
+		 */
+		dispatch(text, dispatchOpts = {}) {
+			const prompt = String(text || "").trim();
+			if (!prompt) return { ok: false, error: "Empty task" };
+
+			const cwd = dispatchOpts.cwd ?? opts.defaultCwd;
+			const writeCapable = dispatchOpts.writeCapable ?? true;
+			const repoRoot = gitRepoRoot(cwd);
+
+			let worktree = Boolean(dispatchOpts.worktree);
+			if (writeCapable && !worktree && activeWritersInRepo(repoRoot).length > 0) {
+				if (!repoRoot) {
+					return {
+						ok: false,
+						error: "Another writer is active here and this isn't a git repo — can't isolate. Stop it first.",
+					};
+				}
+				worktree = true; // force isolation per the locked same-repo rule
+			}
+
+			const id = newViewId();
+			let runCwd = cwd;
+			/** @type {import("../core/types.mjs").WorktreeMode} */
+			let worktreeMode = "off";
+			let worktreePathValue = null;
+
+			if (worktree && repoRoot) {
+				const wt = P.worktreePath(root, id);
+				const res = addWorktree(repoRoot, wt, worktreeBranch(id));
+				if (!res.ok) return { ok: false, error: `Worktree failed: ${res.error}` };
+				runCwd = wt;
+				worktreeMode = "worktree";
+				worktreePathValue = wt;
+			}
+
+			const meta = createView(root, {
+				id,
+				name: slugifyTask(prompt),
+				cwd: runCwd,
+				repoCwd: cwd,
+				repoRoot,
+				worktreeMode,
+				worktreePath: worktreePathValue,
+				writeCapable,
+			});
+			launchForView(meta, prompt, "dispatch");
+			return { ok: true, viewId: id, usedWorktree: worktreeMode === "worktree" };
+		},
+
+		/**
+		 * Append a reply to an existing session by launching a new run. Blocks if a run is live.
+		 * @param {string} viewId
+		 * @param {string} text
+		 * @returns {{ ok: boolean, error?: string }}
+		 */
+		reply(viewId, text) {
+			const prompt = String(text || "").trim();
+			if (!prompt) return { ok: false, error: "Empty reply" };
+			const row = loadRow(root, viewId);
+			if (!row) return { ok: false, error: "Unknown session" };
+			if (row.alive) return { ok: false, error: "A run is already active for this session" };
+			launchForView(row.meta, prompt, "reply");
+			return { ok: true };
+		},
+
+		/**
+		 * Stop the active run for a view (SIGTERM the runner → it finalizes as `stopped`).
+		 * @param {string} viewId
+		 * @returns {{ ok: boolean, error?: string }}
+		 */
+		stop(viewId) {
+			const state = readState(root, viewId);
+			if (!state?.currentRunId) return { ok: false, error: "No active run" };
+			const pid = readPid(root, viewId, state.currentRunId);
+			if (!pid) return { ok: false, error: "No runner pid" };
+			killProcess(pid);
+			return { ok: true };
+		},
+
+		/** @param {string} viewId @param {boolean} pinned */
+		setPinned(viewId, pinned) {
+			const meta = loadRow(root, viewId)?.meta;
+			if (!meta) return { ok: false, error: "Unknown session" };
+			meta.pinned = pinned;
+			writeMeta(root, meta);
+			return { ok: true };
+		},
+
+		/** @param {string} viewId @param {string} name */
+		rename(viewId, name) {
+			const clean = String(name || "").trim();
+			if (!clean) return { ok: false, error: "Empty name" };
+			const meta = loadRow(root, viewId)?.meta;
+			if (!meta) return { ok: false, error: "Unknown session" };
+			meta.name = clean;
+			writeMeta(root, meta);
+			return { ok: true };
+		},
+
+		/**
+		 * Soft-delete a row: archive it (removed from the dashboard) but preserve the session
+		 * file. Optionally also remove its worktree (requires the caller's explicit confirm).
+		 * @param {string} viewId
+		 * @param {{ removeWorktree?: boolean }} [archiveOpts]
+		 */
+		archive(viewId, archiveOpts = {}) {
+			const row = loadRow(root, viewId);
+			if (!row) return { ok: false, error: "Unknown session" };
+			if (row.alive) return { ok: false, error: "Stop the active run before deleting" };
+			if (archiveOpts.removeWorktree && row.meta.worktreeMode === "worktree" && row.meta.worktreePath && row.meta.repoRoot) {
+				removeWorktree(row.meta.repoRoot, row.meta.worktreePath);
+				row.meta.worktreePath = null;
+				row.meta.worktreeMode = "off";
+			}
+			row.meta.archived = true;
+			writeMeta(root, row.meta);
+			return { ok: true };
+		},
+
+		/**
+		 * Recovery: reconcile rows whose runner died without finalizing (e.g. machine crash
+		 * or the runner was killed). If a terminal status exists, project it; otherwise mark
+		 * the row failed/stale. Safe to call on every dashboard open and on session_start.
+		 * @returns {number} number of rows reconciled.
+		 */
+		reconcile() {
+			const now = Date.now();
+			let fixed = 0;
+			for (const row of listRows(root)) {
+				const s = row.state;
+				if (!s?.currentRunId) continue;
+				const looksActive = s.processState === "alive" || s.semanticState === "queued" || s.semanticState === "working";
+				if (!looksActive || row.alive) continue;
+				const status = readStatus(root, row.meta.id, s.currentRunId);
+				if (status?.endedAt) {
+					writeState(root, projectViewState(status, now));
+				} else {
+					s.semanticState = "failed";
+					s.processState = "exited";
+					s.hasError = true;
+					s.needsInput = false;
+					s.error = s.error ?? "Runner exited unexpectedly";
+					s.summary = "Failed (runner exited)";
+					s.updatedAt = now;
+					writeState(root, s);
+				}
+				fixed += 1;
+			}
+			return fixed;
+		},
+
+		/** @returns {import("../core/store.mjs").Row[]} all visible rows. */
+		rows() {
+			return listRows(root);
+		},
+
+		/** @param {string} viewId @returns {import("../core/store.mjs").Row|null} */
+		row(viewId) {
+			return loadRow(root, viewId);
+		},
+	};
+}

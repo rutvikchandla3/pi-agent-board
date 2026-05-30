@@ -1,0 +1,180 @@
+/**
+ * Pure dashboard logic: turn store Rows into display view-models, group them by
+ * semantic state, and filter them. No pi-tui / theme coupling (the dashboard component
+ * applies colors); everything here is unit-tested.
+ */
+import { baseName, relativeTime, truncate } from "./heuristics.mjs";
+import { GROUP_LABELS, GROUP_ORDER, SEMANTIC_STATES } from "./types.mjs";
+
+/** @typedef {import("./store.mjs").Row} Row */
+/** @typedef {import("./types.mjs").SemanticState} SemanticState */
+
+/**
+ * @typedef {Object} RowView
+ * @property {string} id
+ * @property {string} name
+ * @property {string} summary
+ * @property {string} age
+ * @property {string} place
+ * @property {boolean} pinned
+ * @property {SemanticState} state
+ * @property {boolean} alive
+ * @property {boolean} needsInput
+ * @property {boolean} hasError
+ * @property {boolean} worktree
+ * @property {number} lastActivityAt
+ */
+
+/** @param {Row} row @returns {SemanticState} */
+export function rowState(row) {
+	return row.state?.semanticState ?? "queued";
+}
+
+/**
+ * State glyph (plain unicode; the dashboard colors it via theme).
+ * @param {SemanticState} state
+ * @param {boolean} alive
+ * @returns {string}
+ */
+export function stateGlyph(state, alive) {
+	switch (state) {
+		case "needs_input":
+			return "◆";
+		case "working":
+			return alive ? "●" : "◐";
+		case "queued":
+			return "○";
+		case "completed":
+			return "✓";
+		case "failed":
+			return "✗";
+		case "idle":
+			return "·";
+		case "stopped":
+			return "■";
+		default:
+			return "?";
+	}
+}
+
+/**
+ * Theme color name appropriate for a state (consumed by the dashboard).
+ * @param {SemanticState} state
+ * @returns {string}
+ */
+export function stateColor(state) {
+	switch (state) {
+		case "needs_input":
+			return "warning";
+		case "working":
+			return "accent";
+		case "queued":
+			return "muted";
+		case "completed":
+			return "success";
+		case "failed":
+			return "error";
+		case "idle":
+			return "dim";
+		case "stopped":
+			return "muted";
+		default:
+			return "text";
+	}
+}
+
+/**
+ * @param {Row} row
+ * @param {number} now
+ * @returns {RowView}
+ */
+export function rowView(row, now) {
+	const state = rowState(row);
+	const summary = row.state?.summary?.trim() || "—";
+	const lastActivityAt = row.state?.lastActivityAt ?? row.meta.updatedAt ?? row.meta.createdAt;
+	const worktree = row.meta.worktreeMode === "worktree";
+	const place = baseName(row.meta.repoCwd || row.meta.cwd) + (worktree ? "⌥" : "");
+	return {
+		id: row.meta.id,
+		name: row.meta.name,
+		summary,
+		age: relativeTime(lastActivityAt, now),
+		place,
+		pinned: Boolean(row.meta.pinned),
+		state,
+		alive: Boolean(row.alive),
+		needsInput: state === "needs_input",
+		hasError: state === "failed",
+		worktree,
+		lastActivityAt,
+	};
+}
+
+/**
+ * Group rows by semantic state in GROUP_ORDER. Within a group: pinned first, then most
+ * recently active first. Empty groups are omitted.
+ * @param {Row[]} rows
+ * @param {number} now
+ * @returns {Array<{ state: SemanticState, label: string, rows: RowView[] }>}
+ */
+export function groupRows(rows, now) {
+	const views = rows.map((r) => rowView(r, now));
+	/** @type {Array<{state: SemanticState, label: string, rows: RowView[]}>} */
+	const groups = [];
+	for (const state of GROUP_ORDER) {
+		const inGroup = views
+			.filter((v) => v.state === state)
+			.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastActivityAt - a.lastActivityAt);
+		if (inGroup.length > 0) groups.push({ state, label: GROUP_LABELS[state], rows: inGroup });
+	}
+	return groups;
+}
+
+/**
+ * Parse a filter query into a state filter + free-text terms.
+ * Supports `s:<state>` (state prefix) and bare words (AND substring match).
+ * @param {string} query
+ * @returns {{ states: SemanticState[], terms: string[] }}
+ */
+export function parseFilter(query) {
+	/** @type {SemanticState[]} */
+	const states = [];
+	/** @type {string[]} */
+	const terms = [];
+	for (const tok of String(query || "").trim().split(/\s+/).filter(Boolean)) {
+		const m = /^s:(.+)$/i.exec(tok);
+		if (m) {
+			const want = m[1].toLowerCase();
+			for (const s of SEMANTIC_STATES) {
+				if (s === want || s.startsWith(want)) states.push(s);
+			}
+		} else {
+			terms.push(tok.toLowerCase());
+		}
+	}
+	return { states, terms };
+}
+
+/** @param {string} query @returns {boolean} whether the text is a filter expression. */
+export function isFilterQuery(query) {
+	return /(^|\s)s:/i.test(query || "");
+}
+
+/**
+ * Filter rows by a query string.
+ * @param {Row[]} rows
+ * @param {string} query
+ * @returns {Row[]}
+ */
+export function filterRows(rows, query) {
+	const { states, terms } = parseFilter(query);
+	if (states.length === 0 && terms.length === 0) return rows;
+	return rows.filter((row) => {
+		if (states.length > 0 && !states.includes(rowState(row))) return false;
+		if (terms.length === 0) return true;
+		const hay = [row.meta.name, row.state?.summary ?? "", row.meta.repoCwd, row.meta.cwd]
+			.join(" ")
+			.toLowerCase();
+		return terms.every((t) => hay.includes(t));
+	});
+}
