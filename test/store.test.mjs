@@ -12,8 +12,11 @@ import {
 	readMeta,
 	readRoster,
 	readState,
+	readHost,
 	readStatus,
 	removeFromRoster,
+	writeHost,
+	writeHostPid,
 	writeMeta,
 	writeState,
 	writeStatus,
@@ -91,6 +94,38 @@ test("loadRow treats foreground-mirrored processState as alive without a pid", (
 
 		const row = loadRow(root, "v1");
 		assert.equal(row.alive, true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("host status round-trips and loadRow exposes hostAlive", () => {
+	const root = freshRoot();
+	try {
+		createView(root, { id: "v1", name: "a", cwd: "/r" });
+		const host = {
+			version: 1,
+			viewId: "v1",
+			mode: "pty",
+			runnerPid: process.pid,
+			childPid: process.pid,
+			socketPath: P.controlSocketPath(root, "v1"),
+			state: "alive",
+			startedAt: 1,
+			lastSeenAt: 2,
+			endedAt: null,
+			exitCode: null,
+			error: null,
+			cols: 80,
+			rows: 24,
+			attachedClients: 0,
+		};
+		writeHost(root, host);
+		writeHostPid(root, "v1", process.pid);
+		assert.deepEqual(readHost(root, "v1"), host);
+		const row = loadRow(root, "v1");
+		assert.equal(row.hostAlive, true);
+		assert.equal(row.host.socketPath, P.controlSocketPath(root, "v1"));
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

@@ -12,6 +12,7 @@ import { isAlive } from "./pid.mjs";
 /** @typedef {import("./types.mjs").ViewMeta} ViewMeta */
 /** @typedef {import("./types.mjs").ViewState} ViewState */
 /** @typedef {import("./types.mjs").RunStatus} RunStatus */
+/** @typedef {import("./types.mjs").HostStatus} HostStatus */
 
 const META_VERSION = 1;
 
@@ -79,6 +80,26 @@ export function writeStatus(root, status) {
 	atomicWriteJson(P.statusPath(root, status.viewId, status.runId), status);
 }
 
+/** @param {string} root @param {string} viewId @returns {HostStatus|null} */
+export function readHost(root, viewId) {
+	return readJson(P.hostPath(root, viewId), /** @type {HostStatus|null} */ (null));
+}
+
+/** @param {string} root @param {HostStatus} host */
+export function writeHost(root, host) {
+	atomicWriteJson(P.hostPath(root, host.viewId), host);
+}
+
+/** @param {string} root @param {string} viewId @param {number|null} pid */
+export function writeHostPid(root, viewId, pid) {
+	atomicWriteJson(P.hostPidPath(root, viewId), { pid, at: Date.now() });
+}
+
+/** @param {string} root @param {string} viewId @returns {number|null} */
+export function readHostPid(root, viewId) {
+	return readJson(P.hostPidPath(root, viewId), { pid: null }).pid ?? null;
+}
+
 /** @param {string} root @param {string} viewId @param {string} runId @param {number|null} pid */
 export function writePid(root, viewId, runId, pid) {
 	atomicWriteJson(P.pidPath(root, viewId, runId), { pid, at: Date.now() });
@@ -124,7 +145,9 @@ function mtime(dir) {
  * @typedef {Object} Row
  * @property {ViewMeta} meta
  * @property {ViewState|null} state
- * @property {boolean} alive  Whether the row's current run pid is alive.
+ * @property {boolean} alive  Whether the row's current run pid/foreground activity is alive.
+ * @property {boolean} hostAlive Whether a PTY host/socket is alive and attachable.
+ * @property {HostStatus|null} host
  */
 
 /** @param {string} root @param {string} viewId @returns {Row|null} */
@@ -141,7 +164,10 @@ export function loadRow(root, viewId) {
 	// and types a follow-up. In that path there is no detached runner pid for us to
 	// poll, but foreground extension events mirror processState into state.json.
 	if (!alive && state?.processState === "alive") alive = true;
-	return { meta, state, alive };
+	const host = readHost(root, viewId);
+	const hostPid = host?.runnerPid ?? readHostPid(root, viewId);
+	const hostAlive = Boolean(host && host.state === "alive" && isAlive(hostPid));
+	return { meta, state, alive, hostAlive, host };
 }
 
 /**

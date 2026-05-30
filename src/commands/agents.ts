@@ -8,13 +8,16 @@ import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { createService } from "../runtime/service.mjs";
+import { screenLogPath } from "../core/paths.mjs";
 import { DashboardComponent, type DashboardResult } from "../ui/dashboard.js";
+import { PtyAttachComponent } from "../ui/pty-attach.js";
 
 const POLL_MS = 700;
 
 export interface AgentsCommandOptions {
 	root: string;
 	runnerScript: string;
+	ptyRunnerScript?: string;
 	piCommand: string;
 	piArgsPrefix: string[];
 }
@@ -30,6 +33,7 @@ export function registerAgentsCommand(pi: ExtensionAPI, opts: AgentsCommandOptio
 			const service = createService({
 				root: opts.root,
 				runnerScript: opts.runnerScript,
+				ptyRunnerScript: opts.ptyRunnerScript,
 				piCommand: opts.piCommand,
 				piArgsPrefix: opts.piArgsPrefix,
 				defaultCwd: ctx.cwd,
@@ -41,7 +45,7 @@ export function registerAgentsCommand(pi: ExtensionAPI, opts: AgentsCommandOptio
 			}
 
 			if (attachMatch) {
-				await attach(ctx, service, attachMatch[1], stopFirst);
+				await attach(ctx, service, opts.root, attachMatch[1], stopFirst);
 				return;
 			}
 
@@ -51,7 +55,7 @@ export function registerAgentsCommand(pi: ExtensionAPI, opts: AgentsCommandOptio
 				const result = await openDashboard(ctx, service);
 				if (result.action === "attach") {
 					again = false;
-					await attach(ctx, service, result.viewId, result.stopFirst);
+					await attach(ctx, service, opts.root, result.viewId, result.stopFirst);
 				} else {
 					again = false;
 				}
@@ -109,6 +113,7 @@ export async function openDashboard(
 async function attach(
 	ctx: ExtensionCommandContext,
 	service: ReturnType<typeof createService>,
+	root: string,
 	viewId: string,
 	stopFirst: boolean,
 ): Promise<void> {
@@ -117,10 +122,19 @@ async function attach(
 		ctx.ui.notify("Session no longer exists.", "warning");
 		return;
 	}
-	if (stopFirst && row.alive) {
+	if (stopFirst && row.alive && !row.hostAlive) {
 		service.stop(viewId);
 		// Give the runner a moment to terminate the worker and release the session file.
 		await sleep(500);
+	}
+	const target = service.attachTarget(viewId);
+	if (target.kind === "pty" && target.socketPath) {
+		await openPtyAttach(ctx, root, row.meta.id, row.meta.name, target.socketPath);
+		return;
+	}
+	if (row.hostAlive) {
+		service.terminateHost(viewId);
+		await sleep(300);
 	}
 	if (!existsSync(row.meta.sessionFile)) {
 		ctx.ui.notify("Session file isn't ready yet — try again once the run has started.", "warning");
@@ -134,6 +148,37 @@ async function attach(
 		},
 	});
 	if (result.cancelled) ctx.ui.notify("Attach cancelled.", "warning");
+}
+
+async function openPtyAttach(
+	ctx: ExtensionCommandContext,
+	root: string,
+	viewId: string,
+	name: string,
+	socketPath: string,
+): Promise<void> {
+	ctx.ui.setWorkingVisible(false);
+	ctx.ui.setHeader(() => ({ render: () => [], invalidate() {} }));
+	ctx.ui.setFooter(() => ({ render: () => [], invalidate() {} }));
+	ctx.ui.setTitle(`agent-view: ${name}`);
+	try {
+		await ctx.ui.custom(
+			(tui, theme, keybindings, done) =>
+				new PtyAttachComponent(tui, theme as never, keybindings, done, {
+					socketPath,
+					screenLogPath: root ? screenLogPath(root, viewId) : undefined,
+					title: name,
+				}),
+			{
+				overlay: true,
+				overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 },
+			},
+		);
+	} finally {
+		ctx.ui.setHeader(undefined);
+		ctx.ui.setFooter(undefined);
+		ctx.ui.setWorkingVisible(true);
+	}
 }
 
 function installBackToDashboard(ctx: ExtensionCommandContext, service: ReturnType<typeof createService>): void {
@@ -155,7 +200,7 @@ function installBackToDashboard(ctx: ExtensionCommandContext, service: ReturnTyp
 					ctx.ui.notify("Already attached to this session.", "info");
 					return;
 				}
-				await attach(ctx, service, result.viewId, result.stopFirst);
+				await attach(ctx, service, service.root, result.viewId, result.stopFirst);
 			} catch (err) {
 				ctx.ui.notify(`Couldn't open agent view: ${err instanceof Error ? err.message : String(err)}`, "error");
 			} finally {

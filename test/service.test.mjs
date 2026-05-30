@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createService } from "../src/runtime/service.mjs";
-import { createView, readState, writeState } from "../src/core/store.mjs";
+import * as P from "../src/core/paths.mjs";
+import { createView, readState, writeHost, writeHostPid, writeState } from "../src/core/store.mjs";
 
 function freshRoot() {
 	return mkdtempSync(join(tmpdir(), "agentview-service-"));
@@ -42,6 +43,41 @@ test("archiveByState archives inactive rows and skips live rows", () => {
 		assert.deepEqual(service(root).rows().map((r) => r.meta.id), ["work1"]);
 		assert.deepEqual(service(root).archiveByState("working"), { ok: true, archived: 0, skipped: 1 });
 		assert.deepEqual(service(root).rows().map((r) => r.meta.id), ["work1"]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("attachTarget uses PTY only for busy live hosts and falls back to session otherwise", () => {
+	const root = freshRoot();
+	try {
+		const meta = createView(root, { id: "v1", name: "a", cwd: "/r" });
+		assert.deepEqual(service(root).attachTarget("v1"), { kind: "session", sessionFile: meta.sessionFile });
+		writeHost(root, {
+			version: 1,
+			viewId: "v1",
+			mode: "pty",
+			runnerPid: process.pid,
+			childPid: null,
+			socketPath: P.controlSocketPath(root, "v1"),
+			state: "alive",
+			startedAt: 1,
+			lastSeenAt: 2,
+			endedAt: null,
+			exitCode: null,
+			error: null,
+			cols: 80,
+			rows: 24,
+			attachedClients: 0,
+		});
+		writeHostPid(root, "v1", process.pid);
+		assert.deepEqual(service(root).attachTarget("v1"), { kind: "session", sessionFile: meta.sessionFile });
+
+		const busy = readState(root, "v1");
+		busy.semanticState = "working";
+		busy.processState = "alive";
+		writeState(root, busy);
+		assert.equal(service(root).attachTarget("v1").kind, "pty");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

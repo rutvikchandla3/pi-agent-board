@@ -14,12 +14,16 @@ import { createService } from "./runtime/service.mjs";
 import { openDashboard, registerAgentsCommand } from "./commands/agents.js";
 
 const RUNNER_SCRIPT = fileURLToPath(new URL("../runner/job-runner.mjs", import.meta.url));
+const PTY_RUNNER_SCRIPT = fileURLToPath(new URL("../runner/pty-runner.mjs", import.meta.url));
 
 export default function piAgentView(pi: ExtensionAPI): void {
 	const root = defaultRoot();
 	const { piCommand, piArgsPrefix } = resolvePiInvocation();
 
-	registerAgentsCommand(pi, { root, runnerScript: RUNNER_SCRIPT, piCommand, piArgsPrefix });
+	const isHostedChild = process.env.AGENT_VIEW_CHILD === "1";
+	const hostedViewId = process.env.AGENT_VIEW_VIEW_ID;
+
+	registerAgentsCommand(pi, { root, runnerScript: RUNNER_SCRIPT, ptyRunnerScript: PTY_RUNNER_SCRIPT, piCommand, piArgsPrefix });
 	pi.registerFlag("agent-view", {
 		description: "Open the agent-view dashboard on startup",
 		type: "boolean",
@@ -28,7 +32,7 @@ export default function piAgentView(pi: ExtensionAPI): void {
 
 	// Footer status: reconcile stale rows and surface how many need attention.
 	const serviceFor = (ctx: ExtensionContext) =>
-		createService({ root, runnerScript: RUNNER_SCRIPT, piCommand, piArgsPrefix, defaultCwd: ctx.cwd });
+		createService({ root, runnerScript: RUNNER_SCRIPT, ptyRunnerScript: PTY_RUNNER_SCRIPT, piCommand, piArgsPrefix, defaultCwd: ctx.cwd });
 
 	const updateStatus = (ctx: ExtensionContext) => {
 		try {
@@ -36,6 +40,7 @@ export default function piAgentView(pi: ExtensionAPI): void {
 			const rows = listRows(root);
 			const needs = rows.filter((r) => r.state?.semanticState === "needs_input").length;
 			const working = rows.filter((r) => r.alive).length;
+			if (isHostedChild) return;
 			if (rows.length === 0) {
 				ctx.ui.setStatus("agent-view", undefined);
 				return;
@@ -51,8 +56,8 @@ export default function piAgentView(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (event, ctx) => {
 		updateStatus(ctx);
-		if (event.reason === "startup" && pi.getFlag("agent-view") === true && ctx.hasUI) {
-			const service = createService({ root, runnerScript: RUNNER_SCRIPT, piCommand, piArgsPrefix, defaultCwd: ctx.cwd });
+		if (event.reason === "startup" && !isHostedChild && pi.getFlag("agent-view") === true && ctx.hasUI) {
+			const service = createService({ root, runnerScript: RUNNER_SCRIPT, ptyRunnerScript: PTY_RUNNER_SCRIPT, piCommand, piArgsPrefix, defaultCwd: ctx.cwd });
 			service.reconcile();
 			ctx.ui.setWorkingVisible(false);
 			ctx.ui.setHeader(() => ({ render: () => [], invalidate() {} }));
@@ -68,7 +73,9 @@ export default function piAgentView(pi: ExtensionAPI): void {
 	});
 	const syncForeground = (event: unknown, ctx: ExtensionContext) => {
 		try {
-			serviceFor(ctx).syncForegroundEvent(ctx.sessionManager.getSessionFile(), event);
+			const service = serviceFor(ctx);
+			if (hostedViewId) service.syncHostedEvent(hostedViewId, event);
+			else service.syncForegroundEvent(ctx.sessionManager.getSessionFile(), event);
 			updateStatus(ctx);
 		} catch {
 			/* never break the session over dashboard mirroring */

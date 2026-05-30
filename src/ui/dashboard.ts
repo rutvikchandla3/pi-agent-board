@@ -307,7 +307,11 @@ export class DashboardComponent implements Component {
 		if (!res.ok) this.notice(res.error ?? "Dispatch failed", "error");
 		else {
 			this.selectedId = res.viewId ?? this.selectedId;
-			this.notice(`Dispatched${res.usedWorktree ? " (worktree)" : ""}: ${truncate(text, 40)}`, "info");
+			if (res.hostMode === "json-runner") {
+				this.notice(`Dispatched with non-live fallback${res.usedWorktree ? " (worktree)" : ""}: ${res.fallbackReason ?? "PTY unavailable"}`, "warning");
+			} else {
+				this.notice(`Dispatched${res.usedWorktree ? " (worktree)" : ""}: ${truncate(text, 40)}`, "info");
+			}
 		}
 		this.setInput("");
 		this.worktreeNext = false;
@@ -325,6 +329,7 @@ export class DashboardComponent implements Component {
 		}
 		const res = this.deps.service.reply(row.meta.id, text);
 		if (!res.ok) this.notice(res.error ?? "Reply failed", "error");
+		else if (res.hostMode === "json-runner") this.notice(`Reply sent with non-live fallback: ${res.fallbackReason ?? "PTY unavailable"}`, "warning");
 		else this.notice("Reply sent", "info");
 		this.setInput("");
 		this.mode = "peek";
@@ -358,7 +363,7 @@ export class DashboardComponent implements Component {
 	private stopSelected(): void {
 		const row = this.selectedRow();
 		if (!row) return;
-		if (!row.alive) return this.notice("No active run to stop", "warning");
+		if (!row.alive && !row.hostAlive) return this.notice("No active run or host to stop", "warning");
 		const res = this.deps.service.stop(row.meta.id);
 		this.notice(res.ok ? "Stopping…" : (res.error ?? "Stop failed"), res.ok ? "info" : "warning");
 	}
@@ -366,7 +371,7 @@ export class DashboardComponent implements Component {
 	private confirmDelete(): void {
 		const row = this.selectedRow();
 		if (!row) return;
-		if (row.alive) return this.notice("Stop the run before deleting", "warning");
+		if (isAgentBusy(row)) return this.notice("Stop the active run before deleting", "warning");
 		const hasWorktree = row.meta.worktreeMode === "worktree" && !!row.meta.worktreePath;
 		this.pending = {
 			prompt: `Delete "${row.meta.name}"? Session file is preserved.${hasWorktree ? " Worktree will be removed." : ""} (y/N)`,
@@ -385,7 +390,7 @@ export class DashboardComponent implements Component {
 		if (!row) return;
 		const state = rowState(row);
 		const matching = this.deps.service.rows().filter((r) => rowState(r) === state);
-		const deletable = matching.filter((r) => !r.alive).length;
+		const deletable = matching.filter((r) => !isAgentBusy(r)).length;
 		const skipped = matching.length - deletable;
 		if (deletable === 0) return this.notice(`No inactive ${GROUP_LABELS[state].toLowerCase()} sessions to delete`, "warning");
 		this.pending = {
@@ -439,7 +444,9 @@ export class DashboardComponent implements Component {
 	}
 
 	private requestAttach(row: Row): void {
-		if (row.alive) {
+		if (row.hostAlive && isAgentBusy(row)) {
+			this.done({ action: "attach", viewId: row.meta.id, stopFirst: false });
+		} else if (isAgentBusy(row)) {
 			this.pending = {
 				prompt: `"${row.meta.name}" is running. Interrupt and attach? (y/N)`,
 				onYes: () => this.done({ action: "attach", viewId: row.meta.id, stopFirst: true }),
@@ -527,7 +534,9 @@ export class DashboardComponent implements Component {
 
 	private listHints(): string {
 		const t = this.theme;
-		const primary = this.input.trim() ? "enter dispatch" : "enter attach";
+		const selected = this.selectedRow();
+		const live = selected ? selected.hostAlive && isAgentBusy(selected) : false;
+		const primary = this.input.trim() ? "enter dispatch" : live ? "enter attach live" : "enter resume";
 		const hints = [primary, "→ attach", "space peek", "v transcript", "ctrl+r rename", "ctrl+x delete", "X delete state", "/ filter", "? help"];
 		if (this.input.trim() || this.worktreeNext) hints.splice(1, 0, `tab worktree:${this.worktreeNext ? "on" : "off"}`);
 		return t.fg("dim", hints.join(" · "));
@@ -582,7 +591,7 @@ export class DashboardComponent implements Component {
 		if (!row) return [t.fg("muted", "  (no session)")];
 		const st = rowState(row);
 		const out: string[] = [];
-		out.push(`${t.fg(stateColor(st), stateGlyph(st, row.alive))} ${t.fg("accent", t.bold(row.meta.name))} ${t.fg("muted", `[${st}${row.alive ? " · alive" : ""}]`)}`);
+		out.push(`${t.fg(stateColor(st), stateGlyph(st, row.alive, row.hostAlive))} ${t.fg("accent", t.bold(row.meta.name))} ${t.fg("muted", `[${st}${row.alive ? " · alive" : ""}${row.hostAlive ? " · hosted" : ""}]`)}`);
 		out.push(t.fg("dim", `  ${row.meta.repoCwd}${row.meta.worktreeMode === "worktree" ? "  (worktree)" : ""}`));
 		out.push("");
 		out.push(t.fg("muted", "Summary"));
@@ -617,7 +626,7 @@ export class DashboardComponent implements Component {
 		const st = rowState(row);
 		const out: string[] = [];
 		const session = loadSessionView(row.meta.sessionFile);
-		out.push(`${t.fg(stateColor(st), stateGlyph(st, row.alive))} ${t.fg("accent", t.bold(row.meta.name))} ${t.fg("muted", `[session view${row.alive ? " · live" : ""}]`)}`);
+		out.push(`${t.fg(stateColor(st), stateGlyph(st, row.alive, row.hostAlive))} ${t.fg("accent", t.bold(row.meta.name))} ${t.fg("muted", `[session view${row.alive ? " · live" : ""}${row.hostAlive ? " · hosted" : ""}]`)}`);
 		out.push(t.fg("dim", `  ${row.meta.repoCwd}${row.meta.worktreeMode === "worktree" ? "  (worktree)" : ""}`));
 		if (session.header?.cwd && session.header.cwd !== row.meta.repoCwd) {
 			out.push(t.fg("dim", `  session cwd: ${session.header.cwd}`));
@@ -778,10 +787,11 @@ function headerTextRows(theme: ThemeLike, row: Row | null, counts: HeaderCounts,
 	let contextPrefix = ansiFg(148, 163, 184, "Background Pi sessions");
 	if (row) {
 		const state = rowState(row);
-		contextPrefix = `${ansiFg(148, 163, 184, stateGlyph(state, row.alive))} ${ansiFg(226, 232, 240, row.meta.name)}`;
+		contextPrefix = `${ansiFg(148, 163, 184, stateGlyph(state, row.alive, row.hostAlive))} ${ansiFg(226, 232, 240, row.meta.name)}`;
 		if (row.meta.defaultModel) contextBits.push(row.meta.defaultModel);
 		contextBits.push(GROUP_LABELS[state]);
 		if (row.alive) contextBits.push("live");
+		if (row.hostAlive) contextBits.push("hosted");
 		if (row.meta.worktreeMode === "worktree") contextBits.push("worktree");
 	}
 	const path = displayPath(row ? row.meta.repoCwd || row.meta.cwd : defaultCwd);
@@ -864,6 +874,11 @@ function wrap(text: string, width: number, max = 6): string[] {
 	}
 	if (cur && lines.length < max) lines.push(cur);
 	return lines.map((l) => clip(l, width));
+}
+
+function isAgentBusy(row: Row): boolean {
+	const st = row.state?.semanticState;
+	return Boolean(row.alive && (st === "queued" || st === "working"));
 }
 
 function displayPath(path: string): string {

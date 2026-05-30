@@ -12,6 +12,7 @@ import * as P from "./paths.mjs";
 import { writePid } from "./store.mjs";
 
 /** @typedef {import("./types.mjs").RunConfig} RunConfig */
+/** @typedef {import("./types.mjs").HostConfig} HostConfig */
 
 /**
  * @param {string} root
@@ -38,4 +39,28 @@ export function launchRun(root, config, opts) {
 	// inside status.json by the runner itself).
 	writePid(root, config.viewId, config.runId, pid);
 	return { pid, configPath };
+}
+
+/**
+ * Launch a detached PTY host for a view. The host owns a long-lived child Pi and
+ * exposes a JSONL control socket for attach/input/resize/terminate.
+ * @param {string} root
+ * @param {HostConfig} config
+ * @param {{ runnerScript: string, node?: string }} opts
+ * @returns {{ pid: number|null, configPath: string }}
+ */
+export function launchHost(root, config, opts) {
+	const configPath = P.hostConfigPath(root, config.viewId);
+	atomicWriteJson(configPath, config);
+
+	const node = opts.node ?? resolveNode();
+	const child = spawn(node, [opts.runnerScript, configPath], {
+		cwd: config.cwd,
+		detached: true,
+		stdio: "ignore",
+		env: process.env,
+	});
+	child.unref();
+
+	return { pid: child.pid ?? null, configPath };
 }

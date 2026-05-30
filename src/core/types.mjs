@@ -5,6 +5,8 @@
 
 /** Semantic (task) state of a row. @typedef {"queued"|"working"|"needs_input"|"idle"|"completed"|"failed"|"stopped"} SemanticState */
 /** Process/liveness state. @typedef {"alive"|"exited"} ProcessState */
+/** PTY host mode. @typedef {"json-runner"|"pty"} HostMode */
+/** PTY host liveness. @typedef {"starting"|"alive"|"exited"|"failed"} HostState */
 /** How a run was kicked off. @typedef {"dispatch"|"reply"} RunKind */
 /** Worktree isolation mode for a row. @typedef {"off"|"worktree"} WorktreeMode */
 
@@ -84,6 +86,27 @@ export const GROUP_LABELS = {
  */
 
 /**
+ * Durable PTY host snapshot (`host.json`).
+ * @typedef {Object} HostStatus
+ * @property {number} version
+ * @property {string} viewId
+ * @property {HostMode} mode
+ * @property {number|null} runnerPid
+ * @property {number|null} childPid
+ * @property {string|null} socketPath
+ * @property {HostState} state
+ * @property {number} startedAt
+ * @property {number} lastSeenAt
+ * @property {number|null} endedAt
+ * @property {number|null} exitCode
+ * @property {string|null} error
+ * @property {number} cols
+ * @property {number} rows
+ * @property {number} attachedClients
+ * @property {boolean} [attachedEver] Whether any client attached to this host.
+ */
+
+/**
  * Durable per-run snapshot (`runs/<runId>/status.json`).
  * @typedef {Object} RunStatus
  * @property {number} version
@@ -125,6 +148,23 @@ export const GROUP_LABELS = {
  * @property {string[]} piArgsPrefix   Args before our flags (e.g. [cliJsPath] when piCommand is node).
  * @property {string|null} model
  * @property {string|null} tools
+ */
+
+/**
+ * Configuration handed to the detached PTY host runner (written as `host-config.json`).
+ * @typedef {Object} HostConfig
+ * @property {string} root
+ * @property {string} viewId
+ * @property {string} sessionFile
+ * @property {string} cwd
+ * @property {string|null} initialPrompt
+ * @property {string} piCommand
+ * @property {string[]} piArgsPrefix
+ * @property {string|null} model
+ * @property {string|null} tools
+ * @property {Record<string,string>} env
+ * @property {number} cols
+ * @property {number} rows
  */
 
 /** Roster index (`roster.json`). @typedef {Object} Roster @property {number} version @property {string[]} views */

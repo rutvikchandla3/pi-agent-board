@@ -4,10 +4,13 @@
  * safety rule. Pure node + core modules; the Pi-coupled bits (attach, dialogs) live in
  * the command handler. The pi invocation + runner path are injected (resolved in index.ts).
  */
+import { chmodSync, existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { createConnection } from "node:net";
 import { resolve } from "node:path";
 import { finalizeRun, projectViewState, reduceEvent } from "../core/events.mjs";
 import { newRunId, newViewId, slugifyTask } from "../core/ids.mjs";
-import { launchRun } from "../core/launch.mjs";
+import { launchHost as launchHostProcess, launchRun } from "../core/launch.mjs";
 import { gitRepoRoot } from "../core/repo.mjs";
 import { killProcess } from "../core/pid.mjs";
 import * as P from "../core/paths.mjs";
@@ -18,6 +21,7 @@ import {
 	readPid,
 	readState,
 	readStatus,
+	writeHostPid,
 	writeMeta,
 	writeState,
 } from "../core/store.mjs";
@@ -29,15 +33,19 @@ import { addWorktree, removeWorktree, worktreeBranch } from "../core/worktree.mj
  * @param {{
  *   root: string,
  *   runnerScript: string,
+ *   ptyRunnerScript?: string,
  *   piCommand: string,
  *   piArgsPrefix: string[],
  *   defaultCwd: string,
  *   launch?: typeof launchRun,
+ *   launchHost?: typeof launchHostProcess,
  * }} opts
  */
 export function createService(opts) {
 	const root = opts.root;
 	const launch = opts.launch ?? launchRun;
+	const launchHostImpl = opts.launchHost ?? launchHostProcess;
+	const ptyRunnerScript = opts.ptyRunnerScript ?? opts.runnerScript;
 
 	/**
 	 * Launch a run (dispatch or reply) against an existing view, updating its state to queued.
@@ -63,9 +71,41 @@ export function createService(opts) {
 			tools: null,
 		};
 		const { pid } = launch(root, config, { runnerScript: opts.runnerScript });
+		markQueued(meta.id, runId);
+		return { runId, pid };
+	}
 
-		// Reflect "queued/alive" immediately so the dashboard shows it before the runner writes.
-		const state = readState(root, meta.id) ?? blankState(meta.id);
+	/**
+	 * Launch a durable interactive PTY host for a view.
+	 * @param {import("../core/types.mjs").ViewMeta} meta
+	 * @param {string|null} initialPrompt
+	 * @returns {{ pid: number|null }}
+	 */
+	function launchHost(meta, initialPrompt) {
+		/** @type {import("../core/types.mjs").HostConfig} */
+		const config = {
+			root,
+			viewId: meta.id,
+			sessionFile: meta.sessionFile,
+			cwd: meta.cwd,
+			initialPrompt,
+			piCommand: opts.piCommand,
+			piArgsPrefix: opts.piArgsPrefix,
+			model: meta.defaultModel ?? null,
+			tools: null,
+			env: {},
+			cols: Number(process.env.COLUMNS || 120),
+			rows: Number(process.env.LINES || 36),
+		};
+		const { pid } = launchHostImpl(root, config, { runnerScript: ptyRunnerScript });
+		writeHostPid(root, meta.id, pid);
+		markQueued(meta.id, null);
+		return { pid };
+	}
+
+	/** @param {string} viewId @param {string|null} runId */
+	function markQueued(viewId, runId) {
+		const state = readState(root, viewId) ?? blankState(viewId);
 		state.currentRunId = runId;
 		state.semanticState = "queued";
 		state.processState = "alive";
@@ -77,7 +117,6 @@ export function createService(opts) {
 		state.lastActivityAt = Date.now();
 		state.updatedAt = Date.now();
 		writeState(root, state);
-		return { runId, pid };
 	}
 
 	/** @param {string} viewId @returns {import("../core/types.mjs").ViewState} */
@@ -108,7 +147,7 @@ export function createService(opts) {
 	function activeWritersInRepo(repoRoot) {
 		if (!repoRoot) return [];
 		return listRows(root).filter(
-			(r) => r.alive && r.meta.writeCapable && r.meta.worktreeMode !== "worktree" && r.meta.repoRoot === repoRoot,
+			(r) => isAgentBusy(r) && r.meta.writeCapable && r.meta.worktreeMode !== "worktree" && r.meta.repoRoot === repoRoot,
 		);
 	}
 
@@ -168,14 +207,47 @@ export function createService(opts) {
 		return listRows(root).find((r) => samePath(r.meta.sessionFile, sessionFile)) ?? null;
 	}
 
+	/** @param {import("../core/store.mjs").Row} row @param {any} event */
+	function syncRowEvent(row, event) {
+		const now = Date.now();
+		const status = statusFromRow(row);
+
+		if (event.type === "input" || event.type === "before_agent_start" || event.type === "agent_start") {
+			status.semanticState = "working";
+			status.processState = "alive";
+			status.currentTool = null;
+			status.question = null;
+			status.error = null;
+			status.summary = "Working…";
+			status.lastActivityAt = now;
+			writeForegroundState(row, status);
+			return true;
+		}
+
+		if (event.type === "agent_end") {
+			finalizeRun(status, { exitCode: 0 }, now);
+			writeForegroundState(row, status);
+			terminateUnattachedCompletedHost(row);
+			return true;
+		}
+
+		if (reduceEvent(status, event, now)) {
+			status.processState = "alive";
+			writeForegroundState(row, status);
+			return true;
+		}
+		return false;
+	}
+
 	return {
+		root,
 		/**
 		 * Create a new background session and launch its first run.
 		 * Enforces worktree isolation for same-repo parallel writers (locked decision):
 		 * if another non-isolated writer is already active in this repo, we require a worktree.
 		 * @param {string} text
 		 * @param {{ cwd?: string, worktree?: boolean, writeCapable?: boolean }} [dispatchOpts]
-		 * @returns {{ ok: boolean, viewId?: string, error?: string, usedWorktree?: boolean }}
+		 * @returns {{ ok: boolean, viewId?: string, error?: string, usedWorktree?: boolean, hostMode?: "pty"|"json-runner", fallbackReason?: string }}
 		 */
 		dispatch(text, dispatchOpts = {}) {
 			const prompt = String(text || "").trim();
@@ -221,24 +293,35 @@ export function createService(opts) {
 				worktreePath: worktreePathValue,
 				writeCapable,
 			});
-			launchForView(meta, prompt, "dispatch");
-			return { ok: true, viewId: id, usedWorktree: worktreeMode === "worktree" };
+			const pty = ptyHostAvailability();
+			if (pty.ok) launchHost(meta, prompt);
+			else launchForView(meta, prompt, "dispatch");
+			return {
+				ok: true,
+				viewId: id,
+				usedWorktree: worktreeMode === "worktree",
+				hostMode: pty.ok ? "pty" : "json-runner",
+				fallbackReason: pty.ok ? undefined : pty.reason,
+			};
 		},
 
 		/**
 		 * Append a reply to an existing session by launching a new run. Blocks if a run is live.
 		 * @param {string} viewId
 		 * @param {string} text
-		 * @returns {{ ok: boolean, error?: string }}
+		 * @returns {{ ok: boolean, error?: string, hostMode?: "pty"|"json-runner", fallbackReason?: string }}
 		 */
 		reply(viewId, text) {
 			const prompt = String(text || "").trim();
 			if (!prompt) return { ok: false, error: "Empty reply" };
 			const row = loadRow(root, viewId);
 			if (!row) return { ok: false, error: "Unknown session" };
+			if (row.hostAlive) return sendHostMessage(row, { type: "input", data: `${prompt}\r` });
 			if (row.alive) return { ok: false, error: "A run is already active for this session" };
-			launchForView(row.meta, prompt, "reply");
-			return { ok: true };
+			const pty = ptyHostAvailability();
+			if (pty.ok) launchHost(row.meta, prompt);
+			else launchForView(row.meta, prompt, "reply");
+			return { ok: true, hostMode: pty.ok ? "pty" : "json-runner", fallbackReason: pty.ok ? undefined : pty.reason };
 		},
 
 		/**
@@ -247,12 +330,31 @@ export function createService(opts) {
 		 * @returns {{ ok: boolean, error?: string }}
 		 */
 		stop(viewId) {
+			const row = loadRow(root, viewId);
+			if (row?.hostAlive) return sendHostMessage(row, { type: "interrupt" });
 			const state = readState(root, viewId);
 			if (!state?.currentRunId) return { ok: false, error: "No active run" };
 			const pid = readPid(root, viewId, state.currentRunId);
 			if (!pid) return { ok: false, error: "No runner pid" };
 			killProcess(pid);
 			return { ok: true };
+		},
+
+		/** @param {string} viewId */
+		terminateHost(viewId) {
+			const row = loadRow(root, viewId);
+			if (!row?.hostAlive) return { ok: false, error: "No live host" };
+			return sendHostMessage(row, { type: "terminate" });
+		},
+
+		/** @param {string} viewId */
+		attachTarget(viewId) {
+			const row = loadRow(root, viewId);
+			if (!row) return { kind: "missing" };
+			if (row.hostAlive && isAgentBusy(row) && row.host?.socketPath) {
+				return { kind: "pty", socketPath: row.host.socketPath, sessionFile: row.meta.sessionFile };
+			}
+			return { kind: "session", sessionFile: row.meta.sessionFile };
 		},
 
 		/** @param {string} viewId @param {boolean} pinned */
@@ -284,7 +386,8 @@ export function createService(opts) {
 		archive(viewId, archiveOpts = {}) {
 			const row = loadRow(root, viewId);
 			if (!row) return { ok: false, error: "Unknown session" };
-			if (row.alive) return { ok: false, error: "Stop the active run before deleting" };
+			if (isAgentBusy(row)) return { ok: false, error: "Stop the active run before deleting" };
+			if (row.hostAlive) sendHostMessage(row, { type: "terminate" });
 			if (archiveOpts.removeWorktree && row.meta.worktreeMode === "worktree" && row.meta.worktreePath && row.meta.repoRoot) {
 				removeWorktree(row.meta.repoRoot, row.meta.worktreePath);
 				row.meta.worktreePath = null;
@@ -306,10 +409,11 @@ export function createService(opts) {
 			let skipped = 0;
 			for (const row of listRows(root)) {
 				if (row.state?.semanticState !== state) continue;
-				if (row.alive) {
+				if (isAgentBusy(row)) {
 					skipped += 1;
 					continue;
 				}
+				if (row.hostAlive) sendHostMessage(row, { type: "terminate" });
 				row.meta.archived = true;
 				writeMeta(root, row.meta);
 				archived += 1;
@@ -361,33 +465,15 @@ export function createService(opts) {
 			if (!sessionFile || !event?.type) return false;
 			const row = rowForSession(sessionFile);
 			if (!row) return false;
-			const now = Date.now();
-			const status = statusFromRow(row);
+			return syncRowEvent(row, event);
+		},
 
-			if (event.type === "input" || event.type === "before_agent_start" || event.type === "agent_start") {
-				status.semanticState = "working";
-				status.processState = "alive";
-				status.currentTool = null;
-				status.question = null;
-				status.error = null;
-				status.summary = "Working…";
-				status.lastActivityAt = now;
-				writeForegroundState(row, status);
-				return true;
-			}
-
-			if (event.type === "agent_end") {
-				finalizeRun(status, { exitCode: 0 }, now);
-				writeForegroundState(row, status);
-				return true;
-			}
-
-			if (reduceEvent(status, event, now)) {
-				status.processState = "alive";
-				writeForegroundState(row, status);
-				return true;
-			}
-			return false;
+		/** @param {string|undefined} viewId @param {any} event */
+		syncHostedEvent(viewId, event) {
+			if (!viewId || !event?.type) return false;
+			const row = loadRow(root, viewId);
+			if (!row) return false;
+			return syncRowEvent(row, event);
 		},
 
 		/** @returns {import("../core/store.mjs").Row[]} all visible rows. */
@@ -400,4 +486,80 @@ export function createService(opts) {
 			return loadRow(root, viewId);
 		},
 	};
+}
+
+/** @param {import("../core/store.mjs").Row} row */
+function terminateUnattachedCompletedHost(row) {
+	if (!row.hostAlive || row.host?.attachedEver) return;
+	sendHostMessage(row, { type: "terminate" });
+}
+
+/** @param {import("../core/store.mjs").Row} row */
+function isAgentBusy(row) {
+	const st = row.state?.semanticState;
+	return Boolean(row.alive && (st === "queued" || st === "working"));
+}
+
+/**
+ * Send a one-shot JSONL command to a live host socket.
+ * @param {import("../core/store.mjs").Row} row
+ * @param {Record<string, unknown>} message
+ * @returns {{ ok: boolean, error?: string }}
+ */
+function sendHostMessage(row, message) {
+	const socketPath = row.host?.socketPath;
+	if (!socketPath) return { ok: false, error: "No host socket" };
+	try {
+		const socket = createConnection(socketPath);
+		socket.on("connect", () => {
+			socket.write(JSON.stringify(message) + "\n");
+			socket.end();
+		});
+		socket.on("error", () => {});
+		return { ok: true };
+	} catch (err) {
+		return { ok: false, error: err instanceof Error ? err.message : String(err) };
+	}
+}
+
+let cachedPtySupport;
+const requireForPty = createRequire(import.meta.url);
+
+function ptyHostAvailability() {
+	if (process.env.AGENT_VIEW_DISABLE_PTY === "1") return { ok: false, reason: "AGENT_VIEW_DISABLE_PTY=1" };
+	if (process.env.AGENT_VIEW_FORCE_PTY === "1") return { ok: true };
+	return ptySpawnSupported();
+}
+
+function ptySpawnSupported() {
+	if (cachedPtySupport !== undefined) return cachedPtySupport;
+	try {
+		ensureNodePtySpawnHelperExecutable();
+		const pty = requireForPty("node-pty");
+		const proc = pty.spawn(process.execPath, ["-e", "process.exit(0)"], {
+			name: "xterm-256color",
+			cols: 20,
+			rows: 5,
+			cwd: process.cwd(),
+			env: process.env,
+		});
+		proc.kill?.();
+		cachedPtySupport = { ok: true };
+	} catch (err) {
+		cachedPtySupport = { ok: false, reason: err instanceof Error ? err.message : String(err) };
+	}
+	return cachedPtySupport;
+}
+
+function ensureNodePtySpawnHelperExecutable() {
+	try {
+		const pkg = requireForPty.resolve("node-pty/package.json");
+		const root = pkg.slice(0, -"package.json".length);
+		for (const rel of [`prebuilds/${process.platform}-${process.arch}/spawn-helper`, "build/Release/spawn-helper"]) {
+			const helper = root + rel;
+			if (existsSync(helper)) chmodSync(helper, 0o755);
+		}
+	} catch {
+		/* node-pty optional/unavailable */
+	}
 }

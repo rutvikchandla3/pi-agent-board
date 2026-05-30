@@ -19,6 +19,7 @@ import { GROUP_LABELS, GROUP_ORDER, SEMANTIC_STATES } from "./types.mjs";
  * @property {boolean} pinned
  * @property {SemanticState} state
  * @property {boolean} alive
+ * @property {boolean} hostAlive
  * @property {boolean} needsInput
  * @property {boolean} hasError
  * @property {boolean} worktree
@@ -34,18 +35,19 @@ export function rowState(row) {
  * State glyph (plain unicode; the dashboard colors it via theme).
  * @param {SemanticState} state
  * @param {boolean} alive
+ * @param {boolean} [hostAlive]
  * @returns {string}
  */
-export function stateGlyph(state, alive) {
+export function stateGlyph(state, alive, hostAlive = false) {
 	switch (state) {
 		case "needs_input":
 			return "◆";
 		case "working":
 			return alive ? "●" : "◐";
 		case "queued":
-			return "○";
+			return hostAlive ? "◌" : "○";
 		case "completed":
-			return "✓";
+			return hostAlive ? "◌" : "✓";
 		case "failed":
 			return "✗";
 		case "idle":
@@ -103,6 +105,7 @@ export function rowView(row, now) {
 		pinned: Boolean(row.meta.pinned),
 		state,
 		alive: Boolean(row.alive),
+		hostAlive: Boolean(row.hostAlive),
 		needsInput: state === "needs_input",
 		hasError: state === "failed",
 		worktree,
