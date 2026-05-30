@@ -6,7 +6,8 @@
  * closes — attaching to a session (tears down the current session) or quitting. Everything
  * else (dispatch, reply, stop, pin, rename, archive) is handled in-place against the store.
  */
-import type { Component, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
+import { CustomEditor } from "@earendil-works/pi-coding-agent";
+import type { Component, EditorTheme, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { truncate } from "../core/heuristics.mjs";
 import { filterRows, groupRows, rowState, stateColor, stateGlyph } from "../core/rows.mjs";
@@ -53,15 +54,24 @@ export class DashboardComponent implements Component {
 	private scrollTop = 0;
 	private sessionScrollTop = 0;
 	private flash: { text: string; level: "info" | "warning" | "error" } | null = null;
+	private readonly editor: CustomEditor;
 
 	constructor(
 		private readonly tui: TUI,
 		private readonly theme: ThemeLike,
-		_keybindings: KeybindingsManager,
+		keybindings: KeybindingsManager,
 		private readonly done: (result: DashboardResult) => void,
 		private readonly deps: DashboardDeps,
 	) {
-		void _keybindings;
+		this.editor = new CustomEditor(tui, editorTheme(theme), keybindings as never, { paddingX: 0 });
+		this.editor.onChange = (text) => {
+			this.input = text;
+			if (this.mode === "filter") {
+				this.filterQuery = text;
+				this.refresh();
+			}
+		};
+		this.editor.onSubmit = () => this.submitEditor();
 		this.selectedId = deps.initialSelectedId ?? null;
 		this.refresh();
 	}
@@ -142,8 +152,8 @@ export class DashboardComponent implements Component {
 	private handleListKey(data: string): void {
 		if (matchesKey(data, Key.up)) return void this.moveSelection(-1);
 		if (matchesKey(data, Key.down)) return void this.moveSelection(1);
-		if (matchesKey(data, Key.right) || data === ">") return this.attachSelected();
-		if (data === "v") return this.openSessionView();
+		if ((matchesKey(data, Key.right) || data === ">") && this.input.length === 0) return this.attachSelected();
+		if (data === "v" && this.input.length === 0) return this.openSessionView();
 		if (matchesKey(data, Key.enter)) {
 			if (this.input.trim()) return this.submitDispatch();
 			return this.attachSelected();
@@ -152,34 +162,22 @@ export class DashboardComponent implements Component {
 			this.worktreeNext = !this.worktreeNext;
 			return;
 		}
-		if (matchesKey(data, Key.space)) {
-			if (this.input.length === 0) return this.openPeek();
-			this.input += " ";
-			return;
-		}
-		if (data === "/" && this.input.length === 0) return void (this.mode = "filter");
+		if (matchesKey(data, Key.space) && this.input.length === 0) return this.openPeek();
+		if (data === "/" && this.input.length === 0) return this.startFilter();
 		if (data === "?" && this.input.length === 0) return void (this.mode = "help");
-		if (matchesKey(data, Key.ctrl("r"))) return this.startRename();
-		if (matchesKey(data, Key.ctrl("t"))) return this.togglePin();
-		if (matchesKey(data, Key.ctrl("s"))) return this.stopSelected();
-		if (matchesKey(data, Key.ctrl("x"))) return this.confirmDelete();
-		if (data === "X") return this.confirmDeleteState();
-		if (matchesKey(data, Key.backspace) || data === "\x7f") {
-			this.input = this.input.slice(0, -1);
-			return;
-		}
-		if (matchesKey(data, Key.ctrl("u"))) {
-			this.input = "";
-			return;
-		}
+		if (matchesKey(data, Key.ctrl("r")) && this.input.length === 0) return this.startRename();
+		if (matchesKey(data, Key.ctrl("t")) && this.input.length === 0) return this.togglePin();
+		if (matchesKey(data, Key.ctrl("s")) && this.input.length === 0) return this.stopSelected();
+		if (matchesKey(data, Key.ctrl("x")) && this.input.length === 0) return this.confirmDelete();
+		if (data === "X" && this.input.length === 0) return this.confirmDeleteState();
 		if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
 			if (this.input.length > 0) {
-				this.input = "";
+				this.setInput("");
 				return;
 			}
 			return this.done({ action: "exit" });
 		}
-		if (isPrintable(data)) this.input += data;
+		this.handleEditorInput(data);
 	}
 
 	private handlePeekKey(data: string): void {
@@ -194,7 +192,7 @@ export class DashboardComponent implements Component {
 			this.peekStep(1);
 			return;
 		}
-		if (matchesKey(data, Key.enter) || data === "r") return void (this.mode = "reply");
+		if (matchesKey(data, Key.enter) || data === "r") return this.startReply();
 		if (data === "a") return this.attachPeek();
 	}
 
@@ -223,8 +221,7 @@ export class DashboardComponent implements Component {
 		}
 		if (matchesKey(data, Key.space)) return this.openPeek();
 		if (data === "r") {
-			this.peekId = this.selectedId;
-			this.mode = "reply";
+			this.startReply();
 			return;
 		}
 		if (data === "a" || matchesKey(data, Key.enter)) return this.attachSelected();
@@ -250,34 +247,54 @@ export class DashboardComponent implements Component {
 		onCancel: () => void,
 		opts: { live?: boolean; tabToggle?: boolean } = {},
 	): void {
+		void opts.live; // live filtering is driven by editor.onChange.
 		if (matchesKey(data, Key.enter)) return onSubmit();
 		if (matchesKey(data, Key.escape)) return onCancel();
 		if (opts.tabToggle && matchesKey(data, Key.tab)) {
 			this.worktreeNext = !this.worktreeNext;
 			return;
 		}
-		if (matchesKey(data, Key.backspace) || data === "\x7f") {
-			this.input = this.input.slice(0, -1);
-		} else if (matchesKey(data, Key.ctrl("u"))) {
-			this.input = "";
-		} else if (isPrintable(data)) {
-			this.input += data;
-		}
-		if (opts.live) {
-			this.filterQuery = this.input;
-			this.refresh();
+		this.handleEditorInput(data);
+	}
+
+	private handleEditorInput(data: string): void {
+		this.editor.handleInput(data);
+		this.input = this.editor.getText();
+	}
+
+	private setInput(text: string): void {
+		this.input = text;
+		this.editor.setText(text);
+	}
+
+	private submitEditor(): void {
+		switch (this.mode) {
+			case "filter":
+				return this.toListMode();
+			case "rename":
+				return this.submitRename();
+			case "reply":
+				return this.submitReply();
+			case "list":
+			case "dispatch":
+				return this.input.trim() ? this.submitDispatch() : this.attachSelected();
 		}
 	}
 
 	// ---- actions ------------------------------------------------------------
 
 	private toListMode(): void {
-		this.input = "";
 		this.mode = "list";
+		this.setInput("");
+	}
+
+	private startFilter(): void {
+		this.setInput(this.filterQuery);
+		this.mode = "filter";
 	}
 
 	private clearFilter(): void {
-		this.input = "";
+		this.setInput("");
 		this.filterQuery = "";
 		this.refresh();
 		this.mode = "list";
@@ -292,7 +309,7 @@ export class DashboardComponent implements Component {
 			this.selectedId = res.viewId ?? this.selectedId;
 			this.notice(`Dispatched${res.usedWorktree ? " (worktree)" : ""}: ${truncate(text, 40)}`, "info");
 		}
-		this.input = "";
+		this.setInput("");
 		this.worktreeNext = false;
 		this.mode = "list";
 		this.refresh();
@@ -303,13 +320,13 @@ export class DashboardComponent implements Component {
 		const row = this.selectedRow();
 		if (!text || !row) {
 			this.mode = "peek";
-			this.input = "";
+			this.setInput("");
 			return;
 		}
 		const res = this.deps.service.reply(row.meta.id, text);
 		if (!res.ok) this.notice(res.error ?? "Reply failed", "error");
 		else this.notice("Reply sent", "info");
-		this.input = "";
+		this.setInput("");
 		this.mode = "peek";
 		this.refresh();
 	}
@@ -327,7 +344,7 @@ export class DashboardComponent implements Component {
 	private startRename(): void {
 		const row = this.selectedRow();
 		if (!row) return;
-		this.input = row.meta.name;
+		this.setInput(row.meta.name);
 		this.mode = "rename";
 	}
 
@@ -387,6 +404,12 @@ export class DashboardComponent implements Component {
 		if (!this.selectedId) return;
 		this.peekId = this.selectedId;
 		this.mode = "peek";
+	}
+
+	private startReply(): void {
+		this.peekId = this.peekId ?? this.selectedId;
+		this.setInput("");
+		this.mode = "reply";
 	}
 
 	private openSessionView(): void {
@@ -454,7 +477,7 @@ export class DashboardComponent implements Component {
 		if (this.mode === "session") return this.fitToHeight(lines.concat(this.renderSession(width)), width);
 
 		// Body: grouped rows with a scroll viewport.
-		const capacity = Math.max(3, (this.tui.terminal?.rows ?? 24) - lines.length - 3);
+		const capacity = Math.max(3, (this.tui.terminal?.rows ?? 24) - lines.length - 5);
 		const body = this.renderRows(width);
 		const windowed = this.windowBody(body, capacity);
 		lines.push(...windowed.lines);
@@ -468,18 +491,22 @@ export class DashboardComponent implements Component {
 		lines.push(t.fg("dim", "─".repeat(width)));
 		if (this.mode === "list" || this.mode === "dispatch") {
 			lines.push(clip(this.taskInputLine(width), width));
+			lines.push("");
 			lines.push(clip(this.listHints(), width));
 		} else if (this.mode === "filter") {
-			lines.push(clip(`${t.fg("warning", "filter› ")}${this.input}${cursor()}`, width));
+			lines.push(clip(`${t.fg("warning", "filter› ")}${singleLineInput(this.input)}${cursor()}`, width));
+			lines.push("");
 			lines.push(clip(t.fg("dim", "type s:<state> or text · enter apply · esc clear"), width));
 		} else if (this.mode === "rename") {
-			lines.push(clip(`${t.fg("accent", "rename› ")}${this.input}${cursor()}`, width));
+			lines.push(clip(`${t.fg("accent", "rename› ")}${singleLineInput(this.input)}${cursor()}`, width));
+			lines.push("");
 			lines.push(clip(t.fg("dim", "enter save · esc cancel"), width));
 		} else if (this.mode === "confirm" && this.pending) {
 			lines.push(clip(t.fg("warning", this.pending.prompt), width));
 		} else {
 			lines.push(clip(this.listHints(), width));
 		}
+		lines.push(t.fg("dim", "─".repeat(width)));
 		return this.fitToHeight(lines, width);
 	}
 
@@ -531,7 +558,7 @@ export class DashboardComponent implements Component {
 		if (this.input.length === 0) {
 			return `${t.fg("accent", "› ")}${t.fg("muted", "describe a task for a new session")}${cursor()}`;
 		}
-		return `${t.fg("accent", "› ")}${this.input}${cursor()}`;
+		return `${t.fg("accent", "› ")}${singleLineInput(this.input)}${cursor()}`;
 	}
 
 	private renderRows(width: number): string[] {
@@ -595,7 +622,7 @@ export class DashboardComponent implements Component {
 		}
 		out.push(t.fg("dim", "─".repeat(width)));
 		if (this.mode === "reply") {
-			out.push(clip(`${t.fg("accent", "reply› ")}${this.input}${cursor()}`, width));
+			out.push(clip(`${t.fg("accent", "reply› ")}${singleLineInput(this.input)}${cursor()}`, width));
 			out.push(clip(t.fg("dim", "enter send · esc back"), width));
 		} else {
 			out.push(clip(t.fg("dim", "↑↓ prev/next · →/> attach · v transcript · r reply · esc back"), width));
@@ -725,6 +752,10 @@ function cursor(): string {
 	return "\x1b[7m \x1b[27m";
 }
 
+function singleLineInput(text: string): string {
+	return text.replace(/[\r\n]+/g, " ");
+}
+
 function clip(line: string, width: number): string {
 	return truncateToWidth(line, width, "");
 }
@@ -759,6 +790,19 @@ function displayPath(path: string): string {
 
 function clamp(n: number, min: number, max: number): number {
 	return Math.max(min, Math.min(max, n));
+}
+
+function editorTheme(theme: ThemeLike): EditorTheme {
+	return {
+		borderColor: (text: string) => theme.fg("borderMuted", text),
+		selectList: {
+			selectedPrefix: (text: string) => theme.fg("accent", text),
+			selectedText: (text: string) => theme.fg("accent", text),
+			description: (text: string) => theme.fg("muted", text),
+			scrollInfo: (text: string) => theme.fg("muted", text),
+			noMatch: (text: string) => theme.fg("muted", text),
+		},
+	};
 }
 
 function flashColor(level: "info" | "warning" | "error"): string {
