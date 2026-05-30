@@ -60,14 +60,17 @@ pi
 ## 4. Drive the dashboard
 
 Inside pi:
-1. Type `/agents` (or press **Ctrl+G**) → the full-screen dashboard opens.
-2. Press **n**, type a task (e.g. `list the files in this repo and summarize the README`), Enter.
+1. Type `/agents` (or press **Ctrl+G**), or start with `pi --agent-view` → the full-screen dashboard opens.
+   - With `pi --agent-view`, quitting the dashboard exits Pi instead of dropping you into a normal chat session.
+   - The startup path should feel cleaner than `/agents`: no normal Pi header/footer chrome and no dispatch notifications above the dashboard.
+2. Type a task in the bottom input (e.g. `list the files in this repo and summarize the README`), then press **Enter**.
    - A row appears and moves `Queued → Working → Completed` (needs step 2 healthy).
-3. **space** = peek (summary, blocker, latest output); in peek **r** = reply, **a** = attach.
-4. **enter** on a row = attach to that full session (confirms first if it's still running).
+3. **space** = peek when the input is empty (summary, blocker, latest output); in peek **r** = reply, **a** = attach.
+   **→** / **>** = open a full-screen live session view without interrupting; **←** / **<** returns.
+4. **enter** on an empty input = attach to the selected full session (confirms first if it's still running).
    You're now in the real Pi session; run `/agents` again to return.
-5. Other keys: **/** filter (`s:working`, or free text), **r** rename, **p** pin, **s** stop,
-   **x** delete (archives the row, keeps the session file), **?** help, **q** quit.
+5. Other keys: **/** filter (`s:working`, or free text), **Ctrl+R** rename, **Ctrl+T** pin, **Ctrl+S** stop,
+   **Ctrl+X** delete (archives the row, keeps the session file), **?** help, **Esc** clears input / quits when empty.
 
 ## 5. Inspect the durable store on disk
 

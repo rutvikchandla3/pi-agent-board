@@ -22,7 +22,9 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export function registerAgentsCommand(pi: ExtensionAPI, opts: AgentsCommandOptions): void {
 	pi.registerCommand("agents", {
 		description: "Open the background agent-view dashboard",
-		handler: async (_args, ctx) => {
+		handler: async (args, ctx) => {
+			const attachMatch = /(?:^|\s)--attach\s+(\S+)/.exec(args);
+			const stopFirst = /(^|\s)--stop(\s|$)/.test(args);
 			const service = createService({
 				root: opts.root,
 				runnerScript: opts.runnerScript,
@@ -33,6 +35,11 @@ export function registerAgentsCommand(pi: ExtensionAPI, opts: AgentsCommandOptio
 
 			if (!ctx.hasUI) {
 				ctx.ui.notify("The agent-view dashboard requires interactive mode.", "warning");
+				return;
+			}
+
+			if (attachMatch) {
+				await attach(ctx, service, attachMatch[1], stopFirst);
 				return;
 			}
 
@@ -51,7 +58,10 @@ export function registerAgentsCommand(pi: ExtensionAPI, opts: AgentsCommandOptio
 	});
 }
 
-function openDashboard(ctx: ExtensionCommandContext, service: ReturnType<typeof createService>): Promise<DashboardResult> {
+export function openDashboard(
+	ctx: Pick<ExtensionCommandContext, "ui" | "cwd">,
+	service: ReturnType<typeof createService>,
+): Promise<DashboardResult> {
 	return ctx.ui.custom<DashboardResult>((tui, theme, keybindings, done) => {
 		let interval: ReturnType<typeof setInterval> | null = null;
 		const wrappedDone = (result: DashboardResult) => {
@@ -62,7 +72,6 @@ function openDashboard(ctx: ExtensionCommandContext, service: ReturnType<typeof 
 		const comp = new DashboardComponent(tui, theme as never, keybindings, wrappedDone, {
 			service,
 			defaultCwd: ctx.cwd,
-			notify: (msg, level) => ctx.ui.notify(msg, level ?? "info"),
 		});
 		interval = setInterval(() => {
 			comp.refresh();

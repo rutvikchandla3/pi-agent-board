@@ -10,6 +10,7 @@ import type { Component, KeybindingsManager, TUI } from "@earendil-works/pi-tui"
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { truncate } from "../core/heuristics.mjs";
 import { filterRows, groupRows, rowState, stateColor, stateGlyph } from "../core/rows.mjs";
+import { loadSessionView } from "../core/session-view.mjs";
 import type { Row } from "../core/store.mjs";
 import type { createService } from "../runtime/service.mjs";
 
@@ -25,7 +26,7 @@ interface ThemeLike {
 
 export type DashboardResult = { action: "exit" } | { action: "attach"; viewId: string; stopFirst: boolean };
 
-type Mode = "list" | "dispatch" | "filter" | "peek" | "reply" | "rename" | "confirm" | "help";
+type Mode = "list" | "dispatch" | "filter" | "peek" | "reply" | "rename" | "confirm" | "help" | "session";
 
 interface PendingConfirm {
 	prompt: string;
@@ -35,7 +36,6 @@ interface PendingConfirm {
 export interface DashboardDeps {
 	service: Service;
 	defaultCwd: string;
-	notify: (msg: string, level?: "info" | "warning" | "error") => void;
 }
 
 export class DashboardComponent implements Component {
@@ -49,6 +49,8 @@ export class DashboardComponent implements Component {
 	private pending: PendingConfirm | null = null;
 	private peekId: string | null = null;
 	private scrollTop = 0;
+	private sessionScrollTop = 0;
+	private flash: { text: string; level: "info" | "warning" | "error" } | null = null;
 
 	constructor(
 		private readonly tui: TUI,
@@ -87,6 +89,10 @@ export class DashboardComponent implements Component {
 		this.selectedId = this.orderedIds[next];
 	}
 
+	private notice(text: string, level: "info" | "warning" | "error" = "info"): void {
+		this.flash = { text, level };
+	}
+
 	// ---- input --------------------------------------------------------------
 
 	handleInput(data: string): void {
@@ -109,6 +115,9 @@ export class DashboardComponent implements Component {
 			case "peek":
 				this.handlePeekKey(data);
 				break;
+			case "session":
+				this.handleSessionKey(data);
+				break;
 			case "confirm":
 				this.handleConfirmKey(data);
 				break;
@@ -120,24 +129,49 @@ export class DashboardComponent implements Component {
 	}
 
 	private handleListKey(data: string): void {
-		if (matchesKey(data, Key.up) || data === "k") return void this.moveSelection(-1);
-		if (matchesKey(data, Key.down) || data === "j") return void this.moveSelection(1);
-		if (matchesKey(data, Key.enter)) return this.attachSelected();
-		if (matchesKey(data, Key.space)) return this.openPeek();
-		if (data === "n") return void (this.mode = "dispatch");
-		if (data === "/") return void (this.mode = "filter");
-		if (data === "r" || matchesKey(data, Key.ctrl("r"))) return this.startRename();
-		if (data === "p" || matchesKey(data, Key.ctrl("t"))) return this.togglePin();
-		if (data === "s") return this.stopSelected();
-		if (data === "x" || data === "d" || matchesKey(data, Key.ctrl("x"))) return this.confirmDelete();
-		if (data === "?") return void (this.mode = "help");
-		if (matchesKey(data, Key.escape) || data === "q" || matchesKey(data, Key.ctrl("c"))) {
+		if (matchesKey(data, Key.up)) return void this.moveSelection(-1);
+		if (matchesKey(data, Key.down)) return void this.moveSelection(1);
+		if (matchesKey(data, Key.right) || data === ">") return this.openSessionView();
+		if (matchesKey(data, Key.enter)) {
+			if (this.input.trim()) return this.submitDispatch();
+			return this.attachSelected();
+		}
+		if (matchesKey(data, Key.tab)) {
+			this.worktreeNext = !this.worktreeNext;
+			return;
+		}
+		if (matchesKey(data, Key.space)) {
+			if (this.input.length === 0) return this.openPeek();
+			this.input += " ";
+			return;
+		}
+		if (data === "/" && this.input.length === 0) return void (this.mode = "filter");
+		if (data === "?" && this.input.length === 0) return void (this.mode = "help");
+		if (matchesKey(data, Key.ctrl("r"))) return this.startRename();
+		if (matchesKey(data, Key.ctrl("t"))) return this.togglePin();
+		if (matchesKey(data, Key.ctrl("s"))) return this.stopSelected();
+		if (matchesKey(data, Key.ctrl("x"))) return this.confirmDelete();
+		if (matchesKey(data, Key.backspace) || data === "\x7f") {
+			this.input = this.input.slice(0, -1);
+			return;
+		}
+		if (matchesKey(data, Key.ctrl("u"))) {
+			this.input = "";
+			return;
+		}
+		if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+			if (this.input.length > 0) {
+				this.input = "";
+				return;
+			}
 			return this.done({ action: "exit" });
 		}
+		if (isPrintable(data)) this.input += data;
 	}
 
 	private handlePeekKey(data: string): void {
 		if (matchesKey(data, Key.escape)) return void (this.mode = "list");
+		if (matchesKey(data, Key.right) || data === ">") return this.openSessionView();
 		if (matchesKey(data, Key.up)) {
 			this.peekStep(-1);
 			return;
@@ -148,6 +182,38 @@ export class DashboardComponent implements Component {
 		}
 		if (matchesKey(data, Key.enter) || data === "r") return void (this.mode = "reply");
 		if (data === "a") return this.attachPeek();
+	}
+
+	private handleSessionKey(data: string): void {
+		const termRows = this.tui.terminal?.rows ?? 24;
+		const page = Math.max(1, termRows - 8);
+		if (matchesKey(data, Key.left) || matchesKey(data, Key.escape) || data === "<") {
+			this.mode = "list";
+			return;
+		}
+		if (matchesKey(data, Key.up) || data === "k") {
+			this.sessionScrollTop = Math.max(0, this.sessionScrollTop - 1);
+			return;
+		}
+		if (matchesKey(data, Key.down) || data === "j") {
+			this.sessionScrollTop += 1;
+			return;
+		}
+		if (matchesKey(data, Key.pageUp)) {
+			this.sessionScrollTop = Math.max(0, this.sessionScrollTop - page);
+			return;
+		}
+		if (matchesKey(data, Key.pageDown)) {
+			this.sessionScrollTop += page;
+			return;
+		}
+		if (matchesKey(data, Key.space)) return this.openPeek();
+		if (data === "r") {
+			this.peekId = this.selectedId;
+			this.mode = "reply";
+			return;
+		}
+		if (data === "a" || matchesKey(data, Key.enter)) return this.attachSelected();
 	}
 
 	private handleConfirmKey(data: string): void {
@@ -207,10 +273,10 @@ export class DashboardComponent implements Component {
 		const text = this.input.trim();
 		if (!text) return this.toListMode();
 		const res = this.deps.service.dispatch(text, { cwd: this.deps.defaultCwd, worktree: this.worktreeNext });
-		if (!res.ok) this.deps.notify(res.error ?? "Dispatch failed", "error");
+		if (!res.ok) this.notice(res.error ?? "Dispatch failed", "error");
 		else {
 			this.selectedId = res.viewId ?? this.selectedId;
-			this.deps.notify(`Dispatched${res.usedWorktree ? " (worktree)" : ""}: ${truncate(text, 40)}`, "info");
+			this.notice(`Dispatched${res.usedWorktree ? " (worktree)" : ""}: ${truncate(text, 40)}`, "info");
 		}
 		this.input = "";
 		this.worktreeNext = false;
@@ -227,8 +293,8 @@ export class DashboardComponent implements Component {
 			return;
 		}
 		const res = this.deps.service.reply(row.meta.id, text);
-		if (!res.ok) this.deps.notify(res.error ?? "Reply failed", "error");
-		else this.deps.notify("Reply sent", "info");
+		if (!res.ok) this.notice(res.error ?? "Reply failed", "error");
+		else this.notice("Reply sent", "info");
 		this.input = "";
 		this.mode = "peek";
 		this.refresh();
@@ -238,7 +304,7 @@ export class DashboardComponent implements Component {
 		const name = this.input.trim();
 		if (name && this.selectedId) {
 			const res = this.deps.service.rename(this.selectedId, name);
-			if (!res.ok) this.deps.notify(res.error ?? "Rename failed", "error");
+			if (!res.ok) this.notice(res.error ?? "Rename failed", "error");
 		}
 		this.toListMode();
 		this.refresh();
@@ -261,22 +327,22 @@ export class DashboardComponent implements Component {
 	private stopSelected(): void {
 		const row = this.selectedRow();
 		if (!row) return;
-		if (!row.alive) return this.deps.notify("No active run to stop", "warning");
+		if (!row.alive) return this.notice("No active run to stop", "warning");
 		const res = this.deps.service.stop(row.meta.id);
-		this.deps.notify(res.ok ? "Stopping…" : (res.error ?? "Stop failed"), res.ok ? "info" : "warning");
+		this.notice(res.ok ? "Stopping…" : (res.error ?? "Stop failed"), res.ok ? "info" : "warning");
 	}
 
 	private confirmDelete(): void {
 		const row = this.selectedRow();
 		if (!row) return;
-		if (row.alive) return this.deps.notify("Stop the run before deleting", "warning");
+		if (row.alive) return this.notice("Stop the run before deleting", "warning");
 		const hasWorktree = row.meta.worktreeMode === "worktree" && !!row.meta.worktreePath;
 		this.pending = {
 			prompt: `Delete "${row.meta.name}"? Session file is preserved.${hasWorktree ? " Worktree will be removed." : ""} (y/N)`,
 			onYes: () => {
 				const res = this.deps.service.archive(row.meta.id, { removeWorktree: hasWorktree });
-				if (!res.ok) this.deps.notify(res.error ?? "Delete failed", "error");
-				else this.deps.notify("Deleted", "info");
+				if (!res.ok) this.notice(res.error ?? "Delete failed", "error");
+				else this.notice("Deleted", "info");
 				this.refresh();
 			},
 		};
@@ -287,6 +353,12 @@ export class DashboardComponent implements Component {
 		if (!this.selectedId) return;
 		this.peekId = this.selectedId;
 		this.mode = "peek";
+	}
+
+	private openSessionView(): void {
+		if (!this.selectedId) return;
+		this.sessionScrollTop = 0;
+		this.mode = "session";
 	}
 
 	private peekStep(delta: number): void {
@@ -333,19 +405,24 @@ export class DashboardComponent implements Component {
 
 	render(width: number): string[] {
 		const t = this.theme;
-		const rowsTotal = this.deps.service.rows().length;
-		const shown = this.rows.length;
+		const allRows = this.deps.service.rows();
+		const needs = allRows.filter((r) => r.state?.semanticState === "needs_input").length;
+		const working = allRows.filter((r) => r.alive).length;
+		const completed = allRows.filter((r) => r.state?.semanticState === "completed").length;
 		const lines: string[] = [];
 
 		// Header
-		let head = t.fg("accent", t.bold("Agent View"));
-		head += t.fg("muted", `  ${shown}${this.filterQuery ? `/${rowsTotal}` : ""} session${rowsTotal === 1 ? "" : "s"}`);
-		if (this.filterQuery) head += t.fg("warning", `  filter:${this.filterQuery}`);
-		lines.push(clip(head, width));
+		lines.push(clip(t.fg("accent", t.bold("Agent View")), width));
+		lines.push(clip(t.fg("muted", displayPath(this.deps.defaultCwd)), width));
+		let summary = `${needs} awaiting input · ${working} working · ${completed} completed`;
+		if (this.filterQuery) summary += ` · filter:${this.filterQuery}`;
+		lines.push(clip(t.fg(this.filterQuery ? "warning" : "dim", summary), width));
+		if (this.flash) lines.push(clip(t.fg(flashColor(this.flash.level), this.flash.text), width));
 		lines.push(t.fg("dim", "─".repeat(width)));
 
 		if (this.mode === "help") return lines.concat(this.renderHelp(width));
 		if (this.mode === "peek" || this.mode === "reply") return lines.concat(this.renderPeek(width));
+		if (this.mode === "session") return lines.concat(this.renderSession(width));
 
 		// Body: grouped rows with a scroll viewport.
 		const capacity = Math.max(3, (this.tui.terminal?.rows ?? 24) - lines.length - 3);
@@ -355,9 +432,9 @@ export class DashboardComponent implements Component {
 
 		// Footer / input
 		lines.push(t.fg("dim", "─".repeat(width)));
-		if (this.mode === "dispatch") {
-			lines.push(clip(`${t.fg("accent", "task› ")}${this.input}${cursor()}`, width));
-			lines.push(clip(t.fg("dim", `enter dispatch · tab worktree:${this.worktreeNext ? "on" : "off"} · esc cancel`), width));
+		if (this.mode === "list" || this.mode === "dispatch") {
+			lines.push(clip(this.taskInputLine(width), width));
+			lines.push(clip(this.listHints(), width));
 		} else if (this.mode === "filter") {
 			lines.push(clip(`${t.fg("warning", "filter› ")}${this.input}${cursor()}`, width));
 			lines.push(clip(t.fg("dim", "type s:<state> or text · enter apply · esc clear"), width));
@@ -374,13 +451,24 @@ export class DashboardComponent implements Component {
 
 	private listHints(): string {
 		const t = this.theme;
-		return t.fg("dim", "↑↓ move · enter attach · space peek · n new · / filter · r rename · p pin · s stop · x del · ? help · q quit");
+		return t.fg(
+			"dim",
+			`enter create${this.input.trim() ? "" : "/attach"} · tab worktree:${this.worktreeNext ? "on" : "off"} · ↑↓ move · →/> session · ctrl+r rename · ctrl+t pin · ctrl+s stop · ctrl+x del · / filter · ? help`,
+		);
+	}
+
+	private taskInputLine(width: number): string {
+		const t = this.theme;
+		if (this.input.length === 0) {
+			return `${t.fg("accent", "› ")}${t.fg("muted", "describe a task for a new session")}${cursor()}`;
+		}
+		return `${t.fg("accent", "› ")}${this.input}${cursor()}`;
 	}
 
 	private renderRows(width: number): string[] {
 		const t = this.theme;
 		if (this.rows.length === 0) {
-			return [t.fg("muted", this.filterQuery ? "  No sessions match the filter." : "  No background sessions yet. Press 'n' to dispatch one.")];
+			return [t.fg("muted", this.filterQuery ? "  No sessions match the filter." : "  No background sessions yet. Type below and press Enter.")];
 		}
 		const now = Date.now();
 		const groups = groupRows(this.rows, now);
@@ -440,22 +528,75 @@ export class DashboardComponent implements Component {
 			out.push(clip(`${t.fg("accent", "reply› ")}${this.input}${cursor()}`, width));
 			out.push(clip(t.fg("dim", "enter send · esc back"), width));
 		} else {
-			out.push(clip(t.fg("dim", "↑↓ prev/next · r reply · a attach · esc back"), width));
+			out.push(clip(t.fg("dim", "↑↓ prev/next · →/> session view · r reply · a attach · esc back"), width));
 		}
 		return out;
+	}
+
+	private renderSession(width: number): string[] {
+		const t = this.theme;
+		const row = this.selectedRow();
+		if (!row) return [t.fg("muted", "  (no session)")];
+		const st = rowState(row);
+		const out: string[] = [];
+		const session = loadSessionView(row.meta.sessionFile);
+		out.push(`${t.fg(stateColor(st), stateGlyph(st, row.alive))} ${t.fg("accent", t.bold(row.meta.name))} ${t.fg("muted", `[session view${row.alive ? " · live" : ""}]`)}`);
+		out.push(t.fg("dim", `  ${row.meta.repoCwd}${row.meta.worktreeMode === "worktree" ? "  (worktree)" : ""}`));
+		if (session.header?.cwd && session.header.cwd !== row.meta.repoCwd) {
+			out.push(t.fg("dim", `  session cwd: ${session.header.cwd}`));
+		}
+		out.push("");
+
+		const body: string[] = [];
+		if (session.error) {
+			body.push(t.fg("error", `  ${session.error}`));
+		} else if (session.items.length === 0) {
+			body.push(t.fg("muted", "  Session transcript empty yet."));
+		} else {
+			for (const item of session.items) {
+				body.push(this.renderSessionItemLabel(item, width));
+				body.push(...wrap(`  ${item.text}`, width, 10_000));
+				body.push("");
+			}
+			if (body[body.length - 1] === "") body.pop();
+		}
+
+		const capacity = Math.max(3, (this.tui.terminal?.rows ?? 24) - out.length - 3);
+		out.push(...this.windowSession(body, capacity));
+		out.push(t.fg("dim", "─".repeat(width)));
+		out.push(clip(t.fg("dim", "←/< back · ↑↓ scroll · pgup/pgdn page · enter attach · r reply · space peek"), width));
+		return out;
+	}
+
+	private renderSessionItemLabel(item: ReturnType<typeof loadSessionView>["items"][number], width: number): string {
+		const t = this.theme;
+		const label = `  ${item.label}`;
+		switch (item.role) {
+			case "user":
+				return clip(t.fg("accent", label), width);
+			case "assistant":
+				return clip(t.fg("success", label), width);
+			case "custom":
+				return clip(t.fg("warning", label), width);
+			default:
+				return clip(t.fg("muted", label), width);
+		}
 	}
 
 	private renderHelp(width: number): string[] {
 		const t = this.theme;
 		const rows: Array<[string, string]> = [
-			["↑/↓ or j/k", "Move selection"],
-			["enter", "Attach to selected session (confirms if running)"],
-			["space", "Peek: summary, blocker, latest output"],
-			["n", "Dispatch a new background task"],
+			["type + enter", "Create a new Pi session from the input box"],
+			["enter", "Attach to selected session when input is empty"],
+			["↑/↓", "Move selection"],
+			["→ or >", "Open selected session in full-screen session view"],
+			["space", "Peek when input is empty; otherwise inserts a space"],
+			["tab", "Toggle worktree for the next dispatch"],
 			["/", "Filter (s:<state> or free text)"],
-			["r", "Rename · p pin/unpin · s stop · x delete"],
-			["In peek: r", "Reply · a attach · ↑↓ adjacent"],
-			["q / esc", "Quit dashboard (sessions keep running)"],
+			["ctrl+r/t/s/x", "Rename · pin · stop · delete"],
+			["In peek", "→ session view · r reply · a attach · ↑↓ adjacent"],
+			["In session", "← back · ↑↓ scroll · enter attach · r reply"],
+			["esc", "Clear input; if empty, quit standalone dashboard"],
 		];
 		const out = [t.fg("accent", t.bold("  Keys"))];
 		for (const [k, v] of rows) out.push(clip(`  ${t.fg("accent", k.padEnd(14))} ${t.fg("muted", v)}`, width));
@@ -484,6 +625,19 @@ export class DashboardComponent implements Component {
 		if (this.scrollTop > 0) slice[0] = this.theme.fg("dim", `  ↑ ${this.scrollTop} more`);
 		if (more > 0) slice[slice.length - 1] = this.theme.fg("dim", `  ↓ ${more} more`);
 		return { lines: slice };
+	}
+
+	private windowSession(body: string[], capacity: number): string[] {
+		if (body.length <= capacity) {
+			this.sessionScrollTop = 0;
+			return body;
+		}
+		this.sessionScrollTop = Math.max(0, Math.min(this.sessionScrollTop, body.length - capacity));
+		const slice = body.slice(this.sessionScrollTop, this.sessionScrollTop + capacity);
+		const more = body.length - this.sessionScrollTop - capacity;
+		if (this.sessionScrollTop > 0) slice[0] = this.theme.fg("dim", `  ↑ ${this.sessionScrollTop} more`);
+		if (more > 0) slice[slice.length - 1] = this.theme.fg("dim", `  ↓ ${more} more`);
+		return slice;
 	}
 }
 
@@ -523,4 +677,21 @@ function wrap(text: string, width: number, max = 6): string[] {
 	}
 	if (cur && lines.length < max) lines.push(cur);
 	return lines.map((l) => clip(l, width));
+}
+
+function displayPath(path: string): string {
+	const home = process.env.HOME;
+	if (home && path.startsWith(home)) return `~${path.slice(home.length)}` || "~";
+	return path;
+}
+
+function flashColor(level: "info" | "warning" | "error"): string {
+	switch (level) {
+		case "warning":
+			return "warning";
+		case "error":
+			return "error";
+		default:
+			return "success";
+	}
 }

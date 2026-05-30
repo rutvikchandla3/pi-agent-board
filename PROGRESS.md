@@ -23,6 +23,22 @@ Status legend: ☐ todo · ◐ in progress · ☑ done
 
 ## Checkpoint log
 
+### CP3 — 2026-05-30 — standalone-ish dashboard UX
+- Added a full-screen **session view** inside `/agents`: **→ / >** opens the selected row's
+  live transcript from its managed session file without interrupting the worker; **← / <**
+  returns to the dashboard. This preserves the safe attach semantics on **enter**.
+- Added `src/core/session-view.mjs` to parse managed Pi session JSONL files and project the
+  active branch into a readable transcript surface (messages, visible custom messages,
+  compactions, branch summaries).
+- Changed the main dashboard UX to match the Claude-style screenshot more closely: the bottom
+  input is always available, typing there and pressing **Enter** dispatches a new Pi session,
+  and **Enter** on an empty input attaches to the selected session.
+- Added `--agent-view` via `pi.registerFlag("agent-view")`; on `session_start(reason:"startup")`
+  the extension now opens the dashboard **directly** from the startup event with hidden Pi
+  header/footer chrome, so users can launch with `pi --agent-view` into a cleaner fullscreen
+  surface. Quitting that dashboard exits Pi instead of dropping into a chat session.
+
+
 ### CP2 — 2026-05-30 — full MVP wired (M2–M5) + ⚠️ real-worker hang found
 - Built the Pi-coupled layer: `src/runtime/service.mjs` (dispatch/reply/stop/pin/rename/
   archive/reconcile + same-repo worktree safety), `src/ui/dashboard.ts` (one `ctx.ui.custom`

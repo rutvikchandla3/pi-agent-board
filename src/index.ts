@@ -12,7 +12,7 @@ import { resolvePiInvocation } from "./core/invocation.mjs";
 import { defaultRoot } from "./core/paths.mjs";
 import { listRows } from "./core/store.mjs";
 import { createService } from "./runtime/service.mjs";
-import { registerAgentsCommand } from "./commands/agents.js";
+import { openDashboard, registerAgentsCommand } from "./commands/agents.js";
 
 const RUNNER_SCRIPT = fileURLToPath(new URL("../runner/job-runner.mjs", import.meta.url));
 
@@ -21,6 +21,11 @@ export default function piAgentView(pi: ExtensionAPI): void {
 	const { piCommand, piArgsPrefix } = resolvePiInvocation();
 
 	registerAgentsCommand(pi, { root, runnerScript: RUNNER_SCRIPT, piCommand, piArgsPrefix });
+	pi.registerFlag("agent-view", {
+		description: "Open the agent-view dashboard on startup",
+		type: "boolean",
+		default: false,
+	});
 
 	// Convenience shortcut: route to the /agents command (so attach/session-switch run in a
 	// command context). Ctrl+G = "go to agents".
@@ -51,6 +56,25 @@ export default function piAgentView(pi: ExtensionAPI): void {
 		}
 	};
 
-	pi.on("session_start", async (_event, ctx) => updateStatus(ctx));
+	pi.on("session_start", async (event, ctx) => {
+		updateStatus(ctx);
+		if (event.reason === "startup" && pi.getFlag("agent-view") === true && ctx.hasUI) {
+			const service = createService({ root, runnerScript: RUNNER_SCRIPT, piCommand, piArgsPrefix, defaultCwd: ctx.cwd });
+			service.reconcile();
+			ctx.ui.setWorkingVisible(false);
+			ctx.ui.setHeader(() => ({ render: () => [], invalidate() {} }));
+			ctx.ui.setFooter(() => ({ render: () => [], invalidate() {} }));
+			ctx.ui.setTitle("agent view");
+			const result = await openDashboard(ctx, service);
+			if (result.action === "attach") {
+				const suffix = result.stopFirst ? " --stop" : "";
+				setTimeout(() => {
+					pi.sendUserMessage(`/agents --attach ${result.viewId}${suffix}`);
+				}, 0).unref?.();
+			} else {
+				ctx.shutdown();
+			}
+		}
+	});
 	pi.on("agent_end", async (_event, ctx) => updateStatus(ctx));
 }
