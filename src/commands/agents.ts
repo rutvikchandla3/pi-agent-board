@@ -63,6 +63,7 @@ export function registerAgentsCommand(pi: ExtensionAPI, opts: AgentsCommandOptio
 export async function openDashboard(
 	ctx: Pick<ExtensionCommandContext, "ui" | "cwd">,
 	service: ReturnType<typeof createService>,
+	options: { initialSelectedId?: string | null } = {},
 ): Promise<DashboardResult> {
 	ctx.ui.setWorkingVisible(false);
 	ctx.ui.setHeader(() => ({ render: () => [], invalidate() {} }));
@@ -79,6 +80,7 @@ export async function openDashboard(
 			const comp = new DashboardComponent(tui, theme as never, keybindings, wrappedDone, {
 				service,
 				defaultCwd: ctx.cwd,
+				initialSelectedId: options.initialSelectedId,
 			});
 			interval = setInterval(() => {
 				comp.refresh();
@@ -139,7 +141,7 @@ function installBackToDashboard(ctx: ExtensionCommandContext, service: ReturnTyp
 		void (async () => {
 			try {
 				service.reconcile();
-				const result = await openDashboard(ctx, service);
+				const result = await openDashboard(ctx, service, { initialSelectedId: currentViewId(ctx, service) });
 				if (result.action !== "attach") return;
 				const target = service.row(result.viewId);
 				const currentSessionFile = ctx.sessionManager.getSessionFile();
@@ -156,6 +158,12 @@ function installBackToDashboard(ctx: ExtensionCommandContext, service: ReturnTyp
 		})();
 		return { consume: true };
 	});
+}
+
+function currentViewId(ctx: ExtensionCommandContext, service: ReturnType<typeof createService>): string | null {
+	const currentSessionFile = ctx.sessionManager.getSessionFile();
+	if (!currentSessionFile) return null;
+	return service.rows().find((r) => samePath(r.meta.sessionFile, currentSessionFile))?.meta.id ?? null;
 }
 
 function samePath(a: string, b: string): boolean {

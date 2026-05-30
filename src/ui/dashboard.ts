@@ -37,6 +37,7 @@ interface PendingConfirm {
 export interface DashboardDeps {
 	service: Service;
 	defaultCwd: string;
+	initialSelectedId?: string | null;
 }
 
 export class DashboardComponent implements Component {
@@ -61,6 +62,7 @@ export class DashboardComponent implements Component {
 		private readonly deps: DashboardDeps,
 	) {
 		void _keybindings;
+		this.selectedId = deps.initialSelectedId ?? null;
 		this.refresh();
 	}
 
