@@ -36,6 +36,7 @@ interface PendingConfirm {
 }
 
 type InputNoticeColor = "accent" | "success" | "warning" | "muted" | "dim";
+type FlashLevel = "info" | "warning" | "error";
 
 interface InputNotice {
 	text: string;
@@ -62,7 +63,7 @@ export class DashboardComponent implements Component {
 	private scrollTop = 0;
 	private sessionScrollTop = 0;
 	private prewarmedId: string | null = null;
-	private flash: { text: string; level: "info" | "warning" | "error" } | null = null;
+	private flash: { text: string; level: FlashLevel } | null = null;
 	private inputNotice: InputNotice | null = null;
 	private readonly editor: CustomEditor;
 
@@ -127,7 +128,7 @@ export class DashboardComponent implements Component {
 		if (res?.ok) this.prewarmedId = id;
 	}
 
-	private notice(text: string, level: "info" | "warning" | "error" = "info"): void {
+	private notice(text: string, level: FlashLevel = "info"): void {
 		this.flash = { text, level };
 	}
 
@@ -592,7 +593,7 @@ export class DashboardComponent implements Component {
 		const focus = this.selectedRow() ?? allRows[0] ?? null;
 
 		lines.push(...this.renderOverview(width, focus, { needs, working, completed }));
-		if (this.flash) lines.push(clip(t.fg(flashColor(this.flash.level), this.flash.text), width));
+		if (this.flash) lines.push(...renderFlashBanner(this.flash, width));
 
 		if (this.mode === "help") return this.fitToHeight(lines.concat(this.renderHelp(width)), width);
 		if (this.mode === "peek" || this.mode === "reply") return this.fitToHeight(lines.concat(this.renderPeek(width)), width);
@@ -1175,13 +1176,33 @@ function editorTheme(theme: ThemeLike): EditorTheme {
 	};
 }
 
-function flashColor(level: "info" | "warning" | "error"): string {
+function renderFlashBanner(flash: { text: string; level: FlashLevel }, width: number): string[] {
+	const style = flashStyle(flash.level);
+	return [flashBannerLine("", width, style), flashBannerLine(`${style.icon} ${style.label}  ${flash.text}`, width, style), flashBannerLine("", width, style)];
+}
+
+type FlashStyle = {
+	icon: string;
+	label: string;
+	accent: readonly [number, number, number];
+	bg: readonly [number, number, number];
+	fg: readonly [number, number, number];
+};
+
+function flashStyle(level: FlashLevel): FlashStyle {
 	switch (level) {
 		case "warning":
-			return "warning";
+			return { icon: "!", label: "Warning", accent: [245, 158, 11], bg: [39, 31, 14], fg: [253, 230, 138] };
 		case "error":
-			return "error";
+			return { icon: "×", label: "Error", accent: [248, 113, 113], bg: [45, 18, 23], fg: [254, 202, 202] };
 		default:
-			return "success";
+			return { icon: "✓", label: "Notice", accent: [34, 197, 94], bg: [12, 35, 28], fg: [187, 247, 208] };
 	}
+}
+
+function flashBannerLine(content: string, width: number, style: FlashStyle): string {
+	const safeWidth = Math.max(1, width);
+	const bodyWidth = Math.max(0, safeWidth - 2);
+	const body = padTo(clip(content ? ` ${ansiFg(...style.fg, content)}` : "", bodyWidth), bodyWidth);
+	return `${ansiBg(...style.accent)}  ${ansiBg(...style.bg)}${body}\x1b[49m`;
 }
