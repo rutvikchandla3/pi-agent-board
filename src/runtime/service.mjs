@@ -81,7 +81,7 @@ export function createService(opts) {
 	 * @param {string|null} initialPrompt
 	 * @returns {{ pid: number|null }}
 	 */
-	function launchHost(meta, initialPrompt) {
+	function launchHost(meta, initialPrompt, launchOpts = {}) {
 		/** @type {import("../core/types.mjs").HostConfig} */
 		const config = {
 			root,
@@ -99,8 +99,8 @@ export function createService(opts) {
 		};
 		const { pid } = launchHostImpl(root, config, { runnerScript: ptyRunnerScript });
 		writeHostPid(root, meta.id, pid);
-		markQueued(meta.id, null);
-		return { pid };
+		if (launchOpts.markQueued !== false) markQueued(meta.id, null);
+		return { pid, socketPath: P.controlSocketPath(root, meta.id) };
 	}
 
 	/** @param {string} viewId @param {string|null} runId */
@@ -207,6 +207,35 @@ export function createService(opts) {
 		return listRows(root).find((r) => samePath(r.meta.sessionFile, sessionFile)) ?? null;
 	}
 
+	/**
+	 * Keep a small warm pool of idle PTY hosts for fast session switching.
+	 * Busy hosts and attached hosts are never evicted.
+	 * @param {{ keepViewId?: string|null }} [pruneOpts]
+	 */
+	function pruneWarmHosts(pruneOpts = {}) {
+		const maxWarm = envInt("AGENT_VIEW_MAX_WARM_HOSTS", 4, 0, 50);
+		const ttlMs = envInt("AGENT_VIEW_WARM_HOST_TTL_MS", 10 * 60 * 1000, 0, 24 * 60 * 60 * 1000);
+		if (maxWarm === 0 && ttlMs === 0) return;
+		const now = Date.now();
+		const idleHosts = listRows(root)
+			.filter((r) => r.meta.id !== pruneOpts.keepViewId)
+			.filter((r) => r.hostAlive && !isAgentBusy(r) && (r.host?.attachedClients ?? 0) === 0);
+
+		for (const row of idleHosts) {
+			const idleSince = row.state?.lastActivityAt ?? row.host?.startedAt ?? row.meta.updatedAt;
+			if (ttlMs > 0 && now - idleSince > ttlMs) sendHostMessage(row, { type: "terminate" });
+		}
+
+		const survivors = idleHosts
+			.filter((r) => {
+				const idleSince = r.state?.lastActivityAt ?? r.host?.startedAt ?? r.meta.updatedAt;
+				return !(ttlMs > 0 && now - idleSince > ttlMs);
+			})
+			.sort((a, b) => (a.state?.lastActivityAt ?? a.host?.startedAt ?? 0) - (b.state?.lastActivityAt ?? b.host?.startedAt ?? 0));
+		const excess = Math.max(0, survivors.length - maxWarm);
+		for (const row of survivors.slice(0, excess)) sendHostMessage(row, { type: "terminate" });
+	}
+
 	/** @param {import("../core/store.mjs").Row} row @param {any} event */
 	function syncRowEvent(row, event) {
 		const now = Date.now();
@@ -227,7 +256,7 @@ export function createService(opts) {
 		if (event.type === "agent_end") {
 			finalizeRun(status, { exitCode: 0 }, now);
 			writeForegroundState(row, status);
-			terminateUnattachedCompletedHost(row);
+			pruneWarmHosts({ keepViewId: row.meta.id });
 			return true;
 		}
 
@@ -347,11 +376,39 @@ export function createService(opts) {
 			return sendHostMessage(row, { type: "terminate" });
 		},
 
+		/**
+		 * Ensure there is an interactive PTY host for this session. Used for fast attach
+		 * and dashboard prewarm. Starting an idle host must not alter task state.
+		 * @param {string} viewId
+		 * @returns {{ ok: boolean, socketPath?: string, started?: boolean, error?: string, fallbackReason?: string }}
+		 */
+		ensureHost(viewId) {
+			const row = loadRow(root, viewId);
+			if (!row) return { ok: false, error: "Unknown session" };
+			if (row.hostAlive && row.host?.socketPath) return { ok: true, socketPath: row.host.socketPath, started: false };
+
+			const pty = ptyHostAvailability();
+			if (!pty.ok) return { ok: false, error: "PTY unavailable", fallbackReason: pty.reason };
+			if (isAgentBusy(row)) return { ok: false, error: "A non-live background run is active for this session" };
+			if (!existsSync(row.meta.sessionFile)) return { ok: false, error: "Session file isn't ready yet" };
+
+			const launched = launchHost(row.meta, null, { markQueued: false });
+			pruneWarmHosts({ keepViewId: viewId });
+			return { ok: true, socketPath: launched.socketPath, started: true };
+		},
+
+		/** @param {string} viewId */
+		prewarmHost(viewId) {
+			const row = loadRow(root, viewId);
+			if (!row || isAgentBusy(row)) return { ok: false, error: row ? "Session is busy" : "Unknown session" };
+			return this.ensureHost(viewId);
+		},
+
 		/** @param {string} viewId */
 		attachTarget(viewId) {
 			const row = loadRow(root, viewId);
 			if (!row) return { kind: "missing" };
-			if (row.hostAlive && isAgentBusy(row) && row.host?.socketPath) {
+			if (row.hostAlive && row.host?.socketPath) {
 				return { kind: "pty", socketPath: row.host.socketPath, sessionFile: row.meta.sessionFile };
 			}
 			return { kind: "session", sessionFile: row.meta.sessionFile };
@@ -489,12 +546,6 @@ export function createService(opts) {
 }
 
 /** @param {import("../core/store.mjs").Row} row */
-function terminateUnattachedCompletedHost(row) {
-	if (!row.hostAlive || row.host?.attachedEver) return;
-	sendHostMessage(row, { type: "terminate" });
-}
-
-/** @param {import("../core/store.mjs").Row} row */
 function isAgentBusy(row) {
 	const st = row.state?.semanticState;
 	return Boolean(row.alive && (st === "queued" || st === "working"));
@@ -529,6 +580,14 @@ function ptyHostAvailability() {
 	if (process.env.AGENT_VIEW_DISABLE_PTY === "1") return { ok: false, reason: "AGENT_VIEW_DISABLE_PTY=1" };
 	if (process.env.AGENT_VIEW_FORCE_PTY === "1") return { ok: true };
 	return ptySpawnSupported();
+}
+
+function envInt(name, fallback, min, max) {
+	const raw = process.env[name];
+	if (raw === undefined || raw === "") return fallback;
+	const n = Number(raw);
+	if (!Number.isFinite(n)) return fallback;
+	return Math.max(min, Math.min(max, Math.floor(n)));
 }
 
 function ptySpawnSupported() {

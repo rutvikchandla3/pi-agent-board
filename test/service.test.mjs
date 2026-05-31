@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -11,7 +11,7 @@ function freshRoot() {
 	return mkdtempSync(join(tmpdir(), "agentview-service-"));
 }
 
-function service(root) {
+function service(root, overrides = {}) {
 	return createService({
 		root,
 		runnerScript: "/no/runner.mjs",
@@ -19,6 +19,7 @@ function service(root) {
 		piArgsPrefix: [],
 		defaultCwd: process.cwd(),
 		launch: () => ({ pid: null, configPath: "/no/config.json" }),
+		...overrides,
 	});
 }
 
@@ -48,7 +49,7 @@ test("archiveByState archives inactive rows and skips live rows", () => {
 	}
 });
 
-test("attachTarget uses PTY only for busy live hosts and falls back to session otherwise", () => {
+test("attachTarget uses any live PTY host for fast attach", () => {
 	const root = freshRoot();
 	try {
 		const meta = createView(root, { id: "v1", name: "a", cwd: "/r" });
@@ -71,14 +72,46 @@ test("attachTarget uses PTY only for busy live hosts and falls back to session o
 			attachedClients: 0,
 		});
 		writeHostPid(root, "v1", process.pid);
-		assert.deepEqual(service(root).attachTarget("v1"), { kind: "session", sessionFile: meta.sessionFile });
-
-		const busy = readState(root, "v1");
-		busy.semanticState = "working";
-		busy.processState = "alive";
-		writeState(root, busy);
-		assert.equal(service(root).attachTarget("v1").kind, "pty");
+		assert.deepEqual(service(root).attachTarget("v1"), {
+			kind: "pty",
+			socketPath: P.controlSocketPath(root, "v1"),
+			sessionFile: meta.sessionFile,
+		});
 	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("ensureHost starts an idle PTY host without changing row task state", () => {
+	const root = freshRoot();
+	const oldForce = process.env.AGENT_VIEW_FORCE_PTY;
+	try {
+		process.env.AGENT_VIEW_FORCE_PTY = "1";
+		const meta = createView(root, { id: "v1", name: "a", cwd: "/r" });
+		writeFileSync(meta.sessionFile, JSON.stringify({ type: "session", id: "s1", cwd: "/r" }) + "\n");
+		const before = readState(root, "v1");
+		before.semanticState = "completed";
+		before.processState = "exited";
+		before.summary = "Done";
+		writeState(root, before);
+
+		let launched = null;
+		const svc = service(root, { launchHost: (_root, config) => {
+			launched = config;
+			return { pid: process.pid, configPath: "/no/host-config.json" };
+		} });
+		const res = svc.ensureHost("v1");
+		assert.equal(res.ok, true);
+		assert.equal(res.started, true);
+		assert.equal(res.socketPath, P.controlSocketPath(root, "v1"));
+		assert.equal(launched.initialPrompt, null);
+		const after = readState(root, "v1");
+		assert.equal(after.semanticState, "completed");
+		assert.equal(after.processState, "exited");
+		assert.equal(after.summary, "Done");
+	} finally {
+		if (oldForce === undefined) delete process.env.AGENT_VIEW_FORCE_PTY;
+		else process.env.AGENT_VIEW_FORCE_PTY = oldForce;
 		rmSync(root, { recursive: true, force: true });
 	}
 });

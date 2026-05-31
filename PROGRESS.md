@@ -23,6 +23,23 @@ Status legend: ☐ todo · ◐ in progress · ☑ done
 
 ## Checkpoint log
 
+### CP4 — 2026-05-31 — fast non-live attach via warm PTY hosts
+- Non-live attach now uses the same Agent View PTY host path as live sessions. `ctx.switchSession`
+  remains only as a no-PTY fallback, with a fullscreen switching overlay so the previously
+  attached session is not visible during fallback startup.
+- Added `ensureHost()` / dashboard prewarm: selected idle/completed sessions are lazily started
+  as interactive PTY hosts with `initialPrompt: null`, without mutating row task state. Warm
+  attach should be instant; cold attach immediately swaps to the attach surface and retries the
+  socket until the host is ready.
+- Kept completed hosts warm instead of terminating them immediately. Warm pool defaults:
+  `AGENT_VIEW_MAX_WARM_HOSTS=4`, `AGENT_VIEW_WARM_HOST_TTL_MS=600000`.
+- Fixed PTY detach flow: `ctrl+]`, `ctrl+g`, or `←` from a live attach returns to the dashboard
+  loop instead of revealing the original session where `/agents` was invoked.
+- Added internal scrollback controls for PTY attach surfaces: mouse wheel, `pgup` / `pgdn`,
+  `home`, `end`. Scrolling uses an agent-view-owned absolute viewport and clamps at top/bottom
+  so fast wheel events cannot wrap back to the bottom. Normal arrow keys still pass through.
+- Verification: `npm run typecheck` clean; `npm test` 55/55 green.
+
 ### CP3 — 2026-05-30 — standalone-ish dashboard UX
 - Added a full-screen **session view** inside `/agents`: **v** opens the selected row's
   live transcript from its managed session file without interrupting the worker; **← / <**

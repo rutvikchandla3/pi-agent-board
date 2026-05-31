@@ -53,6 +53,7 @@ export class DashboardComponent implements Component {
 	private peekId: string | null = null;
 	private scrollTop = 0;
 	private sessionScrollTop = 0;
+	private prewarmedId: string | null = null;
 	private flash: { text: string; level: "info" | "warning" | "error" } | null = null;
 	private readonly editor: CustomEditor;
 
@@ -74,11 +75,13 @@ export class DashboardComponent implements Component {
 		this.editor.onSubmit = () => this.submitEditor();
 		this.selectedId = deps.initialSelectedId ?? null;
 		this.refresh();
+		this.prewarmSelected();
 	}
 
 	// ---- data ---------------------------------------------------------------
 
 	refresh(): void {
+		const previousSelected = this.selectedId;
 		const all = this.deps.service.rows();
 		this.rows = this.filterQuery ? filterRows(all, this.filterQuery) : all;
 		const groups = groupRows(this.rows, Date.now());
@@ -88,6 +91,7 @@ export class DashboardComponent implements Component {
 		} else if (!this.selectedId || !this.orderedIds.includes(this.selectedId)) {
 			this.selectedId = this.orderedIds[0];
 		}
+		if (this.selectedId && this.selectedId !== previousSelected) this.prewarmSelected();
 	}
 
 	private selectedRow(): Row | null {
@@ -99,7 +103,19 @@ export class DashboardComponent implements Component {
 		if (this.orderedIds.length === 0) return;
 		const cur = this.selectedId ? this.orderedIds.indexOf(this.selectedId) : 0;
 		const next = Math.max(0, Math.min(this.orderedIds.length - 1, (cur < 0 ? 0 : cur) + delta));
-		this.selectedId = this.orderedIds[next];
+		const nextId = this.orderedIds[next];
+		if (nextId === this.selectedId) return;
+		this.selectedId = nextId;
+		this.prewarmSelected();
+	}
+
+	private prewarmSelected(): void {
+		const id = this.selectedId;
+		if (!id || id === this.prewarmedId) return;
+		const row = this.selectedRow();
+		if (!row || row.hostAlive || isAgentBusy(row)) return;
+		const res = this.deps.service.prewarmHost?.(id);
+		if (res?.ok) this.prewarmedId = id;
 	}
 
 	private notice(text: string, level: "info" | "warning" | "error" = "info"): void {
@@ -444,7 +460,7 @@ export class DashboardComponent implements Component {
 	}
 
 	private requestAttach(row: Row): void {
-		if (row.hostAlive && isAgentBusy(row)) {
+		if (row.hostAlive) {
 			this.done({ action: "attach", viewId: row.meta.id, stopFirst: false });
 		} else if (isAgentBusy(row)) {
 			this.pending = {
