@@ -27,6 +27,14 @@
     "dashboard"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rutvikchandla3/pi-agent-board.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rutvikchandla3/pi-agent-board/issues"
+  },
+  "homepage": "https://github.com/rutvikchandla3/pi-agent-board#readme",
   "publishConfig": {
     "access": "public"
   },
