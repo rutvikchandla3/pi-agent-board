@@ -212,7 +212,10 @@ export class DashboardComponent implements Component {
 			}
 			return this.done({ action: "exit" });
 		}
-		if (isPrintable(data) || isBracketedPaste(data)) return this.startDispatch(data);
+		if (isPrintable(data) || isBracketedPaste(data)) {
+			this.notifyInputState("Press i to enter INSERT mode, then type or paste", "accent");
+			return;
+		}
 	}
 
 	private handlePeekKey(data: string): void {
@@ -816,7 +819,7 @@ export class DashboardComponent implements Component {
 		const rows: Array<[string, string]> = [
 			["normal", "Dashboard owns keys; i enters insert mode"],
 			["insert", "Editor owns text keys; / is literal, arrows move cursor"],
-			["type", "Printable keys auto-enter insert; i opens insert; / filters when empty"],
+			["i", "Enter insert/compose mode; then / is literal for slash commands"],
 			["enter", "Normal: attach/resume or dispatch draft; Insert: dispatch/send"],
 			["shift+enter", "Insert a newline while in insert/reply"],
 			["esc", "Insert → normal; Normal with draft clears; empty quits standalone dashboard"],
