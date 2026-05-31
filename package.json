@@ -44,7 +44,9 @@
   "pi": {
     "extensions": [
       "./src/index.ts"
-    ]
+    ],
+    "video": "https://github.com/rutvikchandla3/pi-agent-board/raw/refs/heads/main/assets/demo.mp4",
+    "image": "https://github.com/rutvikchandla3/pi-agent-board/raw/refs/heads/main/assets/banner.png"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
