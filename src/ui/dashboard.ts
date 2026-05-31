@@ -1178,12 +1178,14 @@ function editorTheme(theme: ThemeLike): EditorTheme {
 
 function renderFlashBanner(flash: { text: string; level: FlashLevel }, width: number): string[] {
 	const style = flashStyle(flash.level);
-	return [flashBannerLine("", width, style), flashBannerLine(`${style.icon} ${style.label}  ${flash.text}`, width, style), flashBannerLine("", width, style)];
+	const outside = width >= 48 ? "  " : width >= 24 ? " " : "";
+	const contentWidth = Math.max(1, width - visibleWidth(outside) - 2);
+	const content = clip(` ${style.icon} ${flash.text} `, contentWidth);
+	return [clip(`${outside}${ansiFg(...style.accent, "▌")} ${ansiBg(...style.bg)}${ansiFg(...style.fg, content)}\x1b[49m`, width)];
 }
 
 type FlashStyle = {
 	icon: string;
-	label: string;
 	accent: readonly [number, number, number];
 	bg: readonly [number, number, number];
 	fg: readonly [number, number, number];
@@ -1192,17 +1194,10 @@ type FlashStyle = {
 function flashStyle(level: FlashLevel): FlashStyle {
 	switch (level) {
 		case "warning":
-			return { icon: "!", label: "Warning", accent: [245, 158, 11], bg: [39, 31, 14], fg: [253, 230, 138] };
+			return { icon: "!", accent: [245, 158, 11], bg: [39, 31, 14], fg: [253, 230, 138] };
 		case "error":
-			return { icon: "×", label: "Error", accent: [248, 113, 113], bg: [45, 18, 23], fg: [254, 202, 202] };
+			return { icon: "×", accent: [248, 113, 113], bg: [45, 18, 23], fg: [254, 202, 202] };
 		default:
-			return { icon: "✓", label: "Notice", accent: [34, 197, 94], bg: [12, 35, 28], fg: [187, 247, 208] };
+			return { icon: "✓", accent: [34, 197, 94], bg: [12, 35, 28], fg: [187, 247, 208] };
 	}
-}
-
-function flashBannerLine(content: string, width: number, style: FlashStyle): string {
-	const safeWidth = Math.max(1, width);
-	const bodyWidth = Math.max(0, safeWidth - 2);
-	const body = padTo(clip(content ? ` ${ansiFg(...style.fg, content)}` : "", bodyWidth), bodyWidth);
-	return `${ansiBg(...style.accent)}  ${ansiBg(...style.bg)}${body}\x1b[49m`;
 }
