@@ -35,6 +35,14 @@ interface PendingConfirm {
 	onYes: () => void;
 }
 
+type InputNoticeColor = "accent" | "success" | "warning" | "muted" | "dim";
+
+interface InputNotice {
+	text: string;
+	color: InputNoticeColor;
+	expiresAt: number;
+}
+
 export interface DashboardDeps {
 	service: Service;
 	defaultCwd: string;
@@ -55,6 +63,7 @@ export class DashboardComponent implements Component {
 	private sessionScrollTop = 0;
 	private prewarmedId: string | null = null;
 	private flash: { text: string; level: "info" | "warning" | "error" } | null = null;
+	private inputNotice: InputNotice | null = null;
 	private readonly editor: CustomEditor;
 
 	constructor(
@@ -72,7 +81,7 @@ export class DashboardComponent implements Component {
 				this.refresh();
 			}
 		};
-		this.editor.onSubmit = () => this.submitEditor();
+		this.editor.onSubmit = (text) => this.submitEditor(text);
 		this.selectedId = deps.initialSelectedId ?? null;
 		this.refresh();
 		this.prewarmSelected();
@@ -122,6 +131,15 @@ export class DashboardComponent implements Component {
 		this.flash = { text, level };
 	}
 
+	private notifyInputState(text: string, color: InputNoticeColor): void {
+		this.inputNotice = { text, color, expiresAt: Date.now() + 3_000 };
+	}
+
+	private currentInputNotice(): InputNotice | null {
+		if (this.inputNotice && this.inputNotice.expiresAt <= Date.now()) this.inputNotice = null;
+		return this.inputNotice;
+	}
+
 	// ---- input --------------------------------------------------------------
 
 	handleInput(data: string): void {
@@ -130,7 +148,7 @@ export class DashboardComponent implements Component {
 				this.handleListKey(data);
 				break;
 			case "dispatch":
-				this.handleTextMode(data, () => this.submitDispatch(), () => this.toListMode(), { tabToggle: true });
+				this.handleTextMode(data, () => this.submitDispatch(), () => this.leaveDispatchMode(), { tabToggle: true });
 				break;
 			case "filter":
 				this.handleTextMode(data, () => this.toListMode(), () => this.clearFilter(), { live: true });
@@ -168,8 +186,8 @@ export class DashboardComponent implements Component {
 	private handleListKey(data: string): void {
 		if (matchesKey(data, Key.up)) return void this.moveSelection(-1);
 		if (matchesKey(data, Key.down)) return void this.moveSelection(1);
-		if ((matchesKey(data, Key.right) || data === ">") && this.input.length === 0) return this.attachSelected();
-		if (data === "v" && this.input.length === 0) return this.openSessionView();
+		if (matchesKey(data, Key.right) || data === ">") return this.attachSelected();
+		if (data === "v") return this.openSessionView();
 		if (matchesKey(data, Key.enter)) {
 			if (this.input.trim()) return this.submitDispatch();
 			return this.attachSelected();
@@ -178,14 +196,15 @@ export class DashboardComponent implements Component {
 			this.worktreeNext = !this.worktreeNext;
 			return;
 		}
-		if (matchesKey(data, Key.space) && this.input.length === 0) return this.openPeek();
-		if (data === "/" && this.input.length === 0) return this.startFilter();
-		if (data === "?" && this.input.length === 0) return void (this.mode = "help");
-		if (matchesKey(data, Key.ctrl("r")) && this.input.length === 0) return this.startRename();
-		if (matchesKey(data, Key.ctrl("t")) && this.input.length === 0) return this.togglePin();
-		if (matchesKey(data, Key.ctrl("s")) && this.input.length === 0) return this.stopSelected();
-		if (matchesKey(data, Key.ctrl("x")) && this.input.length === 0) return this.confirmDelete();
-		if (data === "X" && this.input.length === 0) return this.confirmDeleteState();
+		if (matchesKey(data, Key.space)) return this.openPeek();
+		if (data === "/") return this.startFilter();
+		if (data === "?") return void (this.mode = "help");
+		if (data === "i") return this.startDispatch();
+		if (matchesKey(data, Key.ctrl("r"))) return this.startRename();
+		if (matchesKey(data, Key.ctrl("t"))) return this.togglePin();
+		if (matchesKey(data, Key.ctrl("s"))) return this.stopSelected();
+		if (matchesKey(data, Key.ctrl("x"))) return this.confirmDelete();
+		if (data === "X") return this.confirmDeleteState();
 		if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
 			if (this.input.length > 0) {
 				this.setInput("");
@@ -193,7 +212,7 @@ export class DashboardComponent implements Component {
 			}
 			return this.done({ action: "exit" });
 		}
-		this.handleEditorInput(data);
+		if (isPrintable(data) || isBracketedPaste(data)) return this.startDispatch(data);
 	}
 
 	private handlePeekKey(data: string): void {
@@ -265,7 +284,7 @@ export class DashboardComponent implements Component {
 	): void {
 		void opts.live; // live filtering is driven by editor.onChange.
 		if (matchesKey(data, Key.enter)) return onSubmit();
-		if (matchesKey(data, Key.escape)) return onCancel();
+		if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) return onCancel();
 		if (opts.tabToggle && matchesKey(data, Key.tab)) {
 			this.worktreeNext = !this.worktreeNext;
 			return;
@@ -278,12 +297,24 @@ export class DashboardComponent implements Component {
 		this.input = this.editor.getText();
 	}
 
+	private startDispatch(initialText = ""): void {
+		this.mode = "dispatch";
+		this.notifyInputState("INSERT mode — dashboard shortcuts paused; / is literal", "success");
+		if (initialText) this.handleEditorInput(initialText);
+	}
+
+	private leaveDispatchMode(): void {
+		this.mode = "list";
+		this.notifyInputState(this.input.trim() ? "NORMAL mode — draft kept; Enter dispatches" : "NORMAL mode — dashboard shortcuts active", "muted");
+	}
+
 	private setInput(text: string): void {
 		this.input = text;
 		this.editor.setText(text);
 	}
 
-	private submitEditor(): void {
+	private submitEditor(textOverride?: string): void {
+		if (textOverride !== undefined) this.input = textOverride;
 		switch (this.mode) {
 			case "filter":
 				return this.toListMode();
@@ -307,6 +338,7 @@ export class DashboardComponent implements Component {
 	private startFilter(): void {
 		this.setInput(this.filterQuery);
 		this.mode = "filter";
+		this.notifyInputState("FILTER mode — type query; Esc clears", "warning");
 	}
 
 	private clearFilter(): void {
@@ -314,6 +346,7 @@ export class DashboardComponent implements Component {
 		this.filterQuery = "";
 		this.refresh();
 		this.mode = "list";
+		this.notifyInputState("Filter cleared — NORMAL mode", "muted");
 	}
 
 	private submitDispatch(): void {
@@ -332,6 +365,7 @@ export class DashboardComponent implements Component {
 		this.setInput("");
 		this.worktreeNext = false;
 		this.mode = "list";
+		this.inputNotice = null;
 		this.refresh();
 	}
 
@@ -349,6 +383,7 @@ export class DashboardComponent implements Component {
 		else this.notice("Reply sent", "info");
 		this.setInput("");
 		this.mode = "peek";
+		this.inputNotice = null;
 		this.refresh();
 	}
 
@@ -367,6 +402,7 @@ export class DashboardComponent implements Component {
 		if (!row) return;
 		this.setInput(row.meta.name);
 		this.mode = "rename";
+		this.notifyInputState("RENAME mode — Enter saves; Esc cancels", "accent");
 	}
 
 	private togglePin(): void {
@@ -431,6 +467,7 @@ export class DashboardComponent implements Component {
 		this.peekId = this.peekId ?? this.selectedId;
 		this.setInput("");
 		this.mode = "reply";
+		this.notifyInputState("REPLY INSERT mode — arrows edit; Esc returns to peek", "success");
 	}
 
 	private openSessionView(): void {
@@ -500,7 +537,8 @@ export class DashboardComponent implements Component {
 		if (this.mode === "session") return this.fitToHeight(lines.concat(this.renderSession(width)), width);
 
 		// Body: grouped rows with a scroll viewport.
-		const capacity = Math.max(3, (this.tui.terminal?.rows ?? 24) - lines.length - 5);
+		const footer = this.renderFooter(width);
+		const capacity = Math.max(1, (this.tui.terminal?.rows ?? 24) - lines.length - footer.length);
 		const body = this.renderRows(width);
 		const windowed = this.windowBody(body, capacity);
 		lines.push(...windowed.lines);
@@ -510,26 +548,7 @@ export class DashboardComponent implements Component {
 		const spacer = Math.max(0, capacity - windowed.lines.length);
 		for (let i = 0; i < spacer; i++) lines.push("");
 
-		// Footer / input
-		lines.push(t.fg("dim", "─".repeat(width)));
-		if (this.mode === "list" || this.mode === "dispatch") {
-			lines.push(clip(this.taskInputLine(width), width));
-			lines.push("");
-			lines.push(clip(this.listHints(), width));
-		} else if (this.mode === "filter") {
-			lines.push(clip(`${t.fg("warning", "filter› ")}${singleLineInput(this.input)}${cursor()}`, width));
-			lines.push("");
-			lines.push(clip(t.fg("dim", "type s:<state> or text · enter apply · esc clear"), width));
-		} else if (this.mode === "rename") {
-			lines.push(clip(`${t.fg("accent", "rename› ")}${singleLineInput(this.input)}${cursor()}`, width));
-			lines.push("");
-			lines.push(clip(t.fg("dim", "enter save · esc cancel"), width));
-		} else if (this.mode === "confirm" && this.pending) {
-			lines.push(clip(t.fg("warning", this.pending.prompt), width));
-		} else {
-			lines.push(clip(this.listHints(), width));
-		}
-		lines.push(t.fg("dim", "─".repeat(width)));
+		lines.push(...footer);
 		return this.fitToHeight(lines, width);
 	}
 
@@ -548,22 +567,117 @@ export class DashboardComponent implements Component {
 		return renderAgentboardHeader(width, this.theme, row, counts, this.filterQuery, this.deps.defaultCwd);
 	}
 
-	private listHints(): string {
+	private renderFooter(width: number): string[] {
 		const t = this.theme;
-		const selected = this.selectedRow();
-		const live = selected ? selected.hostAlive && isAgentBusy(selected) : false;
-		const primary = this.input.trim() ? "enter dispatch" : live ? "enter attach live" : "enter resume";
-		const hints = [primary, "→ attach", "space peek", "v transcript", "ctrl+r rename", "ctrl+x delete", "X delete state", "/ filter", "? help"];
-		if (this.input.trim() || this.worktreeNext) hints.splice(1, 0, `tab worktree:${this.worktreeNext ? "on" : "off"}`);
-		return t.fg("dim", hints.join(" · "));
+		const modeColor = this.modeColor();
+		const lines = [t.fg(modeColor, "─".repeat(width))];
+		if (this.mode === "list" || this.mode === "dispatch") {
+			lines.push(...this.taskInputLines(width));
+			lines.push("");
+			lines.push(clip(this.listHints(), width));
+		} else if (this.mode === "filter") {
+			lines.push(clip(`${this.modeBadge("FILTER", "warning")} ${t.fg("warning", "filter› ")}${singleLineInput(this.input)}${cursor()}`, width));
+			lines.push("");
+			lines.push(clip(this.hintLine("FILTER", "warning", ["enter apply", "esc clear"]), width));
+		} else if (this.mode === "rename") {
+			lines.push(clip(`${this.modeBadge("RENAME", "accent")} ${t.fg("accent", "rename› ")}${singleLineInput(this.input)}${cursor()}`, width));
+			lines.push("");
+			lines.push(clip(this.hintLine("RENAME", "accent", ["enter save", "esc cancel"]), width));
+		} else if (this.mode === "confirm" && this.pending) {
+			lines.push(clip(t.fg("warning", this.pending.prompt), width));
+		} else {
+			lines.push(clip(this.listHints(), width));
+		}
+		const notice = this.currentInputNotice();
+		if (notice) lines.push(clip(t.fg(notice.color, `ⓘ ${notice.text}`), width));
+		lines.push(t.fg(modeColor, "─".repeat(width)));
+		return lines;
 	}
 
-	private taskInputLine(width: number): string {
-		const t = this.theme;
-		if (this.input.length === 0) {
-			return `${t.fg("accent", "› ")}${t.fg("muted", "describe a task for a new session")}${cursor()}`;
+	private listHints(): string {
+		const selected = this.selectedRow();
+		const live = selected ? selected.hostAlive && isAgentBusy(selected) : false;
+		if (this.mode === "dispatch") {
+			const hints = ["esc normal", "enter dispatch", "shift+enter newline", "←/→ edit", "ctrl/alt+←/→ word"];
+			if (this.input.trim() || this.worktreeNext) hints.splice(2, 0, `tab worktree:${this.worktreeNext ? "on" : "off"}`);
+			return this.hintLine("INSERT", "success", hints);
 		}
-		return `${t.fg("accent", "› ")}${singleLineInput(this.input)}${cursor()}`;
+		const primary = this.input.trim() ? "enter dispatch" : live ? "enter attach live" : "enter resume";
+		const hints = ["i insert", primary, "→ attach", "space peek", "v transcript", "ctrl+r rename", "ctrl+x delete", "X delete state", "/ filter", "? help"];
+		if (this.input.trim()) hints.splice(1, 0, "esc clear");
+		if (this.input.trim() || this.worktreeNext) hints.splice(this.input.trim() ? 3 : 2, 0, `tab worktree:${this.worktreeNext ? "on" : "off"}`);
+		return this.hintLine("NORMAL", "muted", hints);
+	}
+
+	private hintLine(label: string, color: InputNoticeColor, hints: string[]): string {
+		return `${this.modeBadge(label, color)} ${this.theme.fg("dim", hints.join(" · "))}`;
+	}
+
+	private modeBadge(label: string, color: InputNoticeColor): string {
+		return this.theme.fg(color, this.theme.bold(`[${label}]`));
+	}
+
+	private modeColor(): InputNoticeColor {
+		switch (this.mode) {
+			case "dispatch":
+			case "reply":
+				return "success";
+			case "filter":
+			case "confirm":
+				return "warning";
+			case "rename":
+				return "accent";
+			default:
+				return "dim";
+		}
+	}
+
+	private taskInputLines(width: number): string[] {
+		const editing = this.mode === "dispatch";
+		return this.renderEditorInputLines(width, {
+			prompt: editing ? this.theme.fg("success", "┃ ") : this.theme.fg("muted", "› "),
+			continuation: editing ? this.theme.fg("success", "┃ ") : this.theme.fg("dim", "│ "),
+			editing,
+			placeholder: editing ? "" : "describe a task for a new session",
+		});
+	}
+
+	private renderEditorInputLines(
+		width: number,
+		opts: { prompt: string; continuation: string; editing: boolean; placeholder?: string; maxVisible?: number },
+	): string[] {
+		const text = this.input;
+		const lines = this.editor.getLines();
+		const cursorPos = this.editor.getCursor();
+		const maxVisible = opts.maxVisible ?? this.maxEditorVisibleLines();
+		const total = Math.max(1, lines.length);
+		const cursorLine = Math.max(0, Math.min(cursorPos.line, total - 1));
+		const start = Math.max(0, Math.min(cursorLine - maxVisible + 1, total - maxVisible));
+		const end = Math.min(total, start + maxVisible);
+		const out: string[] = [];
+
+		if (!text) {
+			const contentWidth = Math.max(1, width - visibleWidth(opts.prompt));
+			const rendered = opts.editing
+				? renderInputContent("", 0, contentWidth)
+				: this.theme.fg("muted", opts.placeholder ?? "");
+			return [clip(`${opts.prompt}${rendered}`, width)];
+		}
+
+		if (start > 0) out.push(clip(`${opts.prompt}${this.theme.fg("dim", `↑ ${start} more`)}`, width));
+		for (let i = start; i < end; i++) {
+			const prefix = i === 0 && start === 0 ? opts.prompt : opts.continuation;
+			const contentWidth = Math.max(1, width - visibleWidth(prefix));
+			const cursorCol = opts.editing && i === cursorPos.line ? cursorPos.col : null;
+			out.push(clip(`${prefix}${renderInputContent(lines[i] ?? "", cursorCol, contentWidth)}`, width));
+		}
+		if (end < total) out.push(clip(`${opts.continuation}${this.theme.fg("dim", `↓ ${total - end} more`)}`, width));
+		return out;
+	}
+
+	private maxEditorVisibleLines(): number {
+		const rows = this.tui.terminal?.rows ?? 24;
+		return Math.max(1, Math.min(6, Math.floor(rows * 0.25)));
 	}
 
 	private renderRows(width: number): string[] {
@@ -628,10 +742,19 @@ export class DashboardComponent implements Component {
 			out.push(t.fg("error", "Error"));
 			out.push(...wrap(`  ${row.state.error}`, width, 4));
 		}
-		out.push(t.fg("dim", "─".repeat(width)));
+		out.push(t.fg(this.mode === "reply" ? "success" : "dim", "─".repeat(width)));
 		if (this.mode === "reply") {
-			out.push(clip(`${t.fg("accent", "reply› ")}${singleLineInput(this.input)}${cursor()}`, width));
-			out.push(clip(t.fg("dim", "enter send · esc back"), width));
+			out.push(
+				...this.renderEditorInputLines(width, {
+					prompt: `${this.modeBadge("REPLY", "success")} ${t.fg("success", "› ")}`,
+					continuation: t.fg("success", "reply┃ "),
+					editing: true,
+					placeholder: "",
+				}),
+			);
+			out.push(clip(this.hintLine("REPLY INSERT", "success", ["enter send", "shift+enter newline", "esc back"]), width));
+			const notice = this.currentInputNotice();
+			if (notice) out.push(clip(t.fg(notice.color, `ⓘ ${notice.text}`), width));
 		} else {
 			out.push(clip(t.fg("dim", "↑↓ prev/next · →/> attach · v transcript · r reply · esc back"), width));
 		}
@@ -691,19 +814,23 @@ export class DashboardComponent implements Component {
 	private renderHelp(width: number): string[] {
 		const t = this.theme;
 		const rows: Array<[string, string]> = [
-			["type + enter", "Create a new Pi session from the input box"],
-			["enter", "Attach to selected session when input is empty"],
-			["↑/↓", "Move selection"],
+			["normal", "Dashboard owns keys; i enters insert mode"],
+			["insert", "Editor owns text keys; / is literal, arrows move cursor"],
+			["type", "Printable keys auto-enter insert; i opens insert; / filters when empty"],
+			["enter", "Normal: attach/resume or dispatch draft; Insert: dispatch/send"],
+			["shift+enter", "Insert a newline while in insert/reply"],
+			["esc", "Insert → normal; Normal with draft clears; empty quits standalone dashboard"],
+			["↑/↓", "Normal: move selection; Insert: move cursor"],
+			["ctrl/alt+←/→", "Jump by word in insert mode"],
 			["→ or >", "Attach to the selected real Pi session"],
-			["space", "Peek when input is empty; otherwise inserts a space"],
+			["space", "Peek when input is empty"],
 			["tab", "Toggle worktree for the next dispatch"],
-			["/", "Filter (s:<state> or free text)"],
+			["/", "Filter in normal mode; use i then / for slash commands"],
 			["ctrl+r/t/s/x", "Rename · pin · stop · delete selected"],
 			["X", "Delete all inactive sessions in selected state"],
 			["v", "Open read-only transcript view"],
 			["In peek", "→ attach · v transcript · r reply · ↑↓ adjacent"],
 			["In session", "← back · ↑↓ scroll · enter attach · r reply"],
-			["esc", "Clear input; if empty, quit standalone dashboard"],
 		];
 		const out = [t.fg("accent", t.bold("  Keys"))];
 		for (const [k, v] of rows) out.push(clip(`  ${t.fg("accent", k.padEnd(14))} ${t.fg("muted", v)}`, width));
@@ -861,8 +988,30 @@ function isPrintable(data: string): boolean {
 	return [...data].every((ch) => ch >= " " && ch !== "\x7f");
 }
 
+function isBracketedPaste(data: string): boolean {
+	return data.includes("\x1b[200~");
+}
+
 function cursor(): string {
 	return "\x1b[7m \x1b[27m";
+}
+
+function renderInputContent(text: string, cursorCol: number | null, width: number): string {
+	const safeWidth = Math.max(1, width);
+	let start = 0;
+	if (cursorCol !== null && cursorCol >= safeWidth) start = cursorCol - safeWidth + 1;
+	const visibleText = text.slice(start);
+	if (cursorCol === null) return clip(visibleText, safeWidth);
+	return clip(withInlineCursor(visibleText, Math.max(0, cursorCol - start)), safeWidth);
+}
+
+function withInlineCursor(text: string, col: number): string {
+	const safeCol = Math.max(0, Math.min(col, text.length));
+	const before = text.slice(0, safeCol);
+	const after = text.slice(safeCol);
+	if (!after) return `${before}${cursor()}`;
+	const [first = ""] = [...after];
+	return `${before}\x1b[7m${first}\x1b[27m${after.slice(first.length)}`;
 }
 
 function singleLineInput(text: string): string {
