@@ -36,7 +36,7 @@ interface PendingConfirm {
 }
 
 type InputNoticeColor = "accent" | "success" | "warning" | "muted" | "dim";
-type FlashLevel = "info" | "warning" | "error";
+type FlashLevel = "info" | "warn" | "error";
 
 interface InputNotice {
 	text: string;
@@ -368,7 +368,7 @@ export class DashboardComponent implements Component {
 		else {
 			this.selectedId = res.viewId ?? this.selectedId;
 			if (res.hostMode === "json-runner") {
-				this.notice(`Dispatched with non-live fallback${res.usedWorktree ? " (worktree)" : ""}: ${res.fallbackReason ?? "PTY unavailable"}`, "warning");
+				this.notice(`Dispatched with non-live fallback${res.usedWorktree ? " (worktree)" : ""}: ${res.fallbackReason ?? "PTY unavailable"}`, "warn");
 			} else {
 				this.notice(`Dispatched${res.usedWorktree ? " (worktree)" : ""}: ${truncate(text, 40)}`, "info");
 			}
@@ -390,7 +390,7 @@ export class DashboardComponent implements Component {
 		}
 		const res = this.deps.service.reply(row.meta.id, text);
 		if (!res.ok) this.notice(res.error ?? "Reply failed", "error");
-		else if (res.hostMode === "json-runner") this.notice(`Reply sent with non-live fallback: ${res.fallbackReason ?? "PTY unavailable"}`, "warning");
+		else if (res.hostMode === "json-runner") this.notice(`Reply sent with non-live fallback: ${res.fallbackReason ?? "PTY unavailable"}`, "warn");
 		else this.notice("Reply sent", "info");
 		this.setInput("");
 		this.mode = "peek";
@@ -426,15 +426,15 @@ export class DashboardComponent implements Component {
 	private stopSelected(): void {
 		const row = this.selectedRow();
 		if (!row) return;
-		if (!row.alive && !row.hostAlive) return this.notice("No active run or host to stop", "warning");
+		if (!row.alive && !row.hostAlive) return this.notice("No active run or host to stop", "warn");
 		const res = this.deps.service.stop(row.meta.id);
-		this.notice(res.ok ? "Stopping…" : (res.error ?? "Stop failed"), res.ok ? "info" : "warning");
+		this.notice(res.ok ? "Stopping…" : (res.error ?? "Stop failed"), res.ok ? "info" : "warn");
 	}
 
 	private confirmDone(): void {
 		const row = this.selectedRow();
 		if (!row) return;
-		if (isAgentBusy(row)) return this.notice("Wait for the active run to finish before marking done", "warning");
+		if (isAgentBusy(row)) return this.notice("Wait for the active run to finish before marking done", "warn");
 		if (row.state?.semanticState === "completed") return this.notice("Already marked done", "info");
 		this.pending = {
 			prompt: `Mark "${row.meta.name}" as done? (y/N)`,
@@ -507,7 +507,7 @@ export class DashboardComponent implements Component {
 		const matching = this.deps.service.rows().filter((r) => rowState(r) === state);
 		const deletable = matching.filter((r) => !isAgentBusy(r)).length;
 		const skipped = matching.length - deletable;
-		if (deletable === 0) return this.notice(`No inactive ${GROUP_LABELS[state].toLowerCase()} sessions to delete`, "warning");
+		if (deletable === 0) return this.notice(`No inactive ${GROUP_LABELS[state].toLowerCase()} sessions to delete`, "warn");
 		this.pending = {
 			prompt: `Delete ${deletable} ${GROUP_LABELS[state].toLowerCase()} session${deletable === 1 ? "" : "s"}?${skipped ? ` ${skipped} live skipped.` : ""} (y/N)`,
 			onYes: () => {
@@ -647,7 +647,7 @@ export class DashboardComponent implements Component {
 			lines.push("");
 			lines.push(clip(this.hintLine("RENAME", "accent", ["enter save", "esc cancel"]), width));
 		} else if (this.mode === "confirm" && this.pending) {
-			lines.push(clip(t.fg("warning", this.pending.prompt), width));
+			lines.push(...renderFlashBanner({ text: this.pending.prompt, level: "warn" }, width));
 		} else {
 			lines.push(clip(this.listHints(), width));
 		}
@@ -1178,10 +1178,9 @@ function editorTheme(theme: ThemeLike): EditorTheme {
 
 function renderFlashBanner(flash: { text: string; level: FlashLevel }, width: number): string[] {
 	const style = flashStyle(flash.level);
-	const outside = width >= 48 ? "  " : width >= 24 ? " " : "";
-	const contentWidth = Math.max(1, width - visibleWidth(outside) - 2);
+	const contentWidth = Math.max(1, width - 1);
 	const content = clip(` ${style.icon} ${flash.text} `, contentWidth);
-	return [clip(`${outside}${ansiFg(...style.accent, "▌")} ${ansiBg(...style.bg)}${ansiFg(...style.fg, content)}\x1b[49m`, width)];
+	return [clip(`${ansiFg(...style.accent, "▌")}${ansiBg(...style.bg)}${ansiFg(...style.fg, content)}\x1b[49m`, width)];
 }
 
 type FlashStyle = {
@@ -1193,11 +1192,11 @@ type FlashStyle = {
 
 function flashStyle(level: FlashLevel): FlashStyle {
 	switch (level) {
-		case "warning":
+		case "warn":
 			return { icon: "!", accent: [245, 158, 11], bg: [39, 31, 14], fg: [253, 230, 138] };
 		case "error":
 			return { icon: "×", accent: [248, 113, 113], bg: [45, 18, 23], fg: [254, 202, 202] };
 		default:
-			return { icon: "✓", accent: [34, 197, 94], bg: [12, 35, 28], fg: [187, 247, 208] };
+			return { icon: "i", accent: [56, 189, 248], bg: [8, 31, 49], fg: [186, 230, 253] };
 	}
 }
