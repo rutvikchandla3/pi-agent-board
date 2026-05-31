@@ -593,7 +593,7 @@ export class DashboardComponent implements Component {
 		const focus = this.selectedRow() ?? allRows[0] ?? null;
 
 		lines.push(...this.renderOverview(width, focus, { needs, working, completed }));
-		if (this.flash) lines.push(...renderFlashBanner(this.flash, width));
+		if (this.flash) lines.push(...renderFlashBanner(this.flash, width, { bottomGap: true }));
 
 		if (this.mode === "help") return this.fitToHeight(lines.concat(this.renderHelp(width)), width);
 		if (this.mode === "peek" || this.mode === "reply") return this.fitToHeight(lines.concat(this.renderPeek(width)), width);
@@ -1176,11 +1176,12 @@ function editorTheme(theme: ThemeLike): EditorTheme {
 	};
 }
 
-function renderFlashBanner(flash: { text: string; level: FlashLevel }, width: number): string[] {
+function renderFlashBanner(flash: { text: string; level: FlashLevel }, width: number, opts: { bottomGap?: boolean } = {}): string[] {
 	const style = flashStyle(flash.level);
 	const contentWidth = Math.max(1, width - 1);
 	const content = clip(` ${style.icon} ${flash.text} `, contentWidth);
-	return [clip(`${ansiFg(...style.accent, "▌")}${ansiBg(...style.bg)}${ansiFg(...style.fg, content)}\x1b[49m`, width)];
+	const line = clip(`${ansiFg(...style.accent, "▌")}${ansiBg(...style.bg)}${ansiFg(...style.fg, content)}\x1b[49m`, width);
+	return opts.bottomGap ? [line, ""] : [line];
 }
 
 type FlashStyle = {
