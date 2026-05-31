@@ -24,12 +24,12 @@ export const PROCESS_STATES = /** @type {const} */ (["alive", "exited"]);
 
 /** Order rows are grouped/shown in the dashboard (most-actionable first). */
 export const GROUP_ORDER = /** @type {const} */ ([
-	"needs_input",
-	"working",
 	"queued",
-	"failed",
-	"completed",
+	"working",
+	"needs_input",
 	"idle",
+	"completed",
+	"failed",
 	"stopped",
 ]);
 
@@ -39,7 +39,7 @@ export const GROUP_LABELS = {
 	working: "Working",
 	queued: "Queued",
 	failed: "Failed",
-	completed: "Completed",
+	completed: "Done",
 	idle: "Idle",
 	stopped: "Stopped",
 };

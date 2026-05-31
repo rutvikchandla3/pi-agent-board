@@ -64,7 +64,7 @@ Inside pi:
    - With `pi --agent-view`, quitting the dashboard exits Pi instead of dropping you into a normal chat session.
    - The startup path should feel cleaner than `/agents`: no normal Pi header/footer chrome and no dispatch notifications above the dashboard.
 2. Type a task in the bottom input (e.g. `list the files in this repo and summarize the README`), then press **Enter**.
-   - A row appears and moves `Queued → Working → Completed` (needs step 2 healthy).
+   - A row appears and moves `Queued → Working → Done` (needs step 2 healthy).
 3. **space** = peek when the input is empty (summary, blocker, latest output); in peek **r** = reply, **a** = attach.
    **→** / **>** = open a full-screen live session view without interrupting; **←** / **<** returns.
 4. **enter** on an empty input = attach to the selected full session (confirms first if it's still running).

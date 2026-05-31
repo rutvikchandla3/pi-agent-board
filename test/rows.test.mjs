@@ -32,7 +32,7 @@ test("rowState defaults to queued", () => {
 test("groupRows orders by GROUP_ORDER and omits empty groups", () => {
 	const rows = [row("a", "completed"), row("b", "needs_input"), row("c", "working")];
 	const groups = groupRows(rows, 0);
-	assert.deepEqual(groups.map((g) => g.state), ["needs_input", "working", "completed"]);
+	assert.deepEqual(groups.map((g) => g.state), ["working", "needs_input", "completed"]);
 });
 
 test("groupRows sorts pinned first then recent", () => {

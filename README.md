@@ -25,7 +25,7 @@ pi --agent-view             # launch straight into the dashboard UI
 - **`/agents`** opens a full-screen dashboard, global across projects.
 - **`pi --agent-view`** starts directly in a cleaner dashboard-first UI (no normal Pi header/footer chrome) and quits Pi when you leave it.
 - **Dispatch** by typing in the bottom input and pressing `enter` → a new persisted Pi session + headless worker.
-- **Live rows** grouped by state: Needs input · Working · Queued · Failed · Completed · Idle · Stopped.
+- **Live rows** grouped by stage: Queued · Working · Needs input · Idle · Done · Failed · Stopped.
 - **Peek** (`space`) a row for its summary, blocker/question, and latest output; **reply** (`r`)
   inline without attaching.
 - **Attach** (`enter` or `→` / `>`) to continue the full interactive Pi session (confirms + interrupts if it's

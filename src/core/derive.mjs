@@ -42,7 +42,7 @@ export function fallbackStatusText(state) {
 		case "idle":
 			return "Idle";
 		case "completed":
-			return "Completed";
+			return "Done";
 		case "failed":
 			return "Failed";
 		case "stopped":

@@ -436,7 +436,7 @@ export function createService(opts) {
 		},
 
 		/**
-		 * Explicitly mark an inactive session as done/completed. Successful runs settle as
+		 * Explicitly mark an inactive session as done. Successful runs settle as
 		 * `idle` until the user reviews and confirms this action from the dashboard.
 		 * @param {string} viewId
 		 * @returns {{ ok: boolean, error?: string }}
@@ -468,8 +468,23 @@ export function createService(opts) {
 		archive(viewId, archiveOpts = {}) {
 			const row = loadRow(root, viewId);
 			if (!row) return { ok: false, error: "Unknown session" };
-			if (isAgentBusy(row)) return { ok: false, error: "Stop the active run before deleting" };
 			if (row.hostAlive) sendHostMessage(row, { type: "terminate" });
+			if (row.alive && row.state?.currentRunId) {
+				const pid = readPid(root, viewId, row.state.currentRunId);
+				if (pid) killProcess(pid);
+			}
+			if (isAgentBusy(row)) {
+				const state = row.state ?? blankState(viewId);
+				state.semanticState = "stopped";
+				state.processState = "exited";
+				state.needsInput = false;
+				state.hasError = false;
+				state.question = null;
+				state.summary = "Stopped";
+				state.lastActivityAt = Date.now();
+				state.updatedAt = Date.now();
+				writeState(root, state);
+			}
 			if (archiveOpts.removeWorktree && row.meta.worktreeMode === "worktree" && row.meta.worktreePath && row.meta.repoRoot) {
 				removeWorktree(row.meta.repoRoot, row.meta.worktreePath);
 				row.meta.worktreePath = null;
@@ -578,15 +593,15 @@ function isAgentBusy(row) {
 
 /** @param {import("../core/types.mjs").ViewState} state */
 function completionSummary(state) {
-	const generic = new Set(["", "Queued", "Working…", "Idle", "Needs input", "Completed"]);
+	const generic = new Set(["", "Queued", "Working…", "Idle", "Needs input", "Completed", "Done"]);
 	if (!generic.has(state.summary?.trim?.() ?? "")) return compactSummary(state.summary);
-	return "Completed";
+	return "Done";
 }
 
 /** @param {string} text */
 function compactSummary(text) {
 	const cleaned = String(text || "").replace(/\s+/g, " ").trim();
-	if (!cleaned) return "Completed";
+	if (!cleaned) return "Done";
 	const first = firstSentence(cleaned);
 	return truncate(first.length >= 12 ? first : cleaned, 80);
 }

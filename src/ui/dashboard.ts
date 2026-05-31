@@ -10,7 +10,7 @@ import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import type { Component, EditorTheme, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { firstSentence, truncate } from "../core/heuristics.mjs";
-import { filterRows, groupRows, rowState, stateColor, stateGlyph } from "../core/rows.mjs";
+import { filterRows, groupRows, rowState, stateGlyph } from "../core/rows.mjs";
 import { loadSessionView } from "../core/session-view.mjs";
 import { GROUP_LABELS } from "../core/types.mjs";
 import { readState, writeState, type Row } from "../core/store.mjs";
@@ -436,7 +436,7 @@ export class DashboardComponent implements Component {
 		if (isAgentBusy(row)) return this.notice("Wait for the active run to finish before marking done", "warning");
 		if (row.state?.semanticState === "completed") return this.notice("Already marked done", "info");
 		this.pending = {
-			prompt: `Mark "${row.meta.name}" as done / Completed? (y/N)`,
+			prompt: `Mark "${row.meta.name}" as done? (y/N)`,
 			onYes: () => {
 				const res = this.markCompleted(row);
 				if (!res.ok) this.notice(res.error ?? "Mark done failed", "error");
@@ -485,10 +485,10 @@ export class DashboardComponent implements Component {
 	private confirmDelete(): void {
 		const row = this.selectedRow();
 		if (!row) return;
-		if (isAgentBusy(row)) return this.notice("Stop the active run before deleting", "warning");
 		const hasWorktree = row.meta.worktreeMode === "worktree" && !!row.meta.worktreePath;
+		const busy = isAgentBusy(row);
 		this.pending = {
-			prompt: `Delete "${row.meta.name}"? Session file is preserved.${hasWorktree ? " Worktree will be removed." : ""} (y/N)`,
+			prompt: `Delete "${row.meta.name}"?${busy ? " Active run will be stopped." : ""} Session file is preserved.${hasWorktree ? " Worktree will be removed." : ""} (y/N)`,
 			onYes: () => {
 				const res = this.deps.service.archive(row.meta.id, { removeWorktree: hasWorktree });
 				if (!res.ok) this.notice(res.error ?? "Delete failed", "error");
@@ -586,7 +586,7 @@ export class DashboardComponent implements Component {
 		const t = this.theme;
 		const allRows = this.deps.service.rows();
 		const needs = allRows.filter((r) => r.state?.semanticState === "needs_input").length;
-		const working = allRows.filter((r) => r.alive).length;
+		const working = allRows.filter((r) => r.state?.semanticState === "working").length;
 		const completed = allRows.filter((r) => r.state?.semanticState === "completed").length;
 		const lines: string[] = [];
 		const focus = this.selectedRow() ?? allRows[0] ?? null;
@@ -752,7 +752,8 @@ export class DashboardComponent implements Component {
 		const out: string[] = [];
 		for (const g of groups) {
 			if (out.length > 0) out.push("");
-			out.push(clip(`${t.fg(stateColor(g.state), g.label)}${t.fg("dim", ` · ${g.rows.length}`)}`, width));
+			const glyph = stateGlyph(g.state, g.state === "working");
+			out.push(clip(`${stageFg(g.state, `${glyph} ${g.label}`)}${t.fg("dim", ` · ${g.rows.length}`)}`, width));
 			for (const rv of g.rows) {
 				out.push(this.renderRow(rv, width));
 			}
@@ -763,7 +764,7 @@ export class DashboardComponent implements Component {
 	private renderRow(rv: ReturnType<typeof import("../core/rows.mjs")["rowView"]>, width: number): string {
 		const t = this.theme;
 		const selected = rv.id === this.selectedId;
-		const marker = selected ? t.fg("accent", "›") : t.fg(stateColor(rv.state), "·");
+		const marker = stageFg(rv.state, selected ? "›" : stateGlyph(rv.state, rv.alive, rv.hostAlive));
 		const badge = `${rv.pinned ? "★ " : ""}${rv.worktree ? "⌥ " : ""}`;
 		const ageRaw = ` ${rv.age}`;
 		const nameW = clamp(Math.floor(width * 0.34), 18, 30);
@@ -774,7 +775,7 @@ export class DashboardComponent implements Component {
 		const folder = folderW > 0 ? ` ${t.fg("dim", folderText)}` : "";
 		const summaryW = Math.max(8, width - nameW - visibleWidth(folder) - visibleWidth(ageRaw) - 4);
 		const summary = truncate(rv.summary, summaryW);
-		let line = `${marker} ${t.fg(selected ? "accent" : "text", nameText)}${folder} ${t.fg(selected ? "text" : "muted", summary)}`;
+		let line = `${marker} ${t.fg(selected ? "text" : "muted", selected ? t.bold(nameText) : nameText)}${folder} ${t.fg(selected ? "text" : "muted", summary)}`;
 		line = padTo(line, width - visibleWidth(ageRaw));
 		line += t.fg("dim", ageRaw);
 		return clip(line, width);
@@ -786,7 +787,7 @@ export class DashboardComponent implements Component {
 		if (!row) return [t.fg("muted", "  (no session)")];
 		const st = rowState(row);
 		const out: string[] = [];
-		out.push(`${t.fg(stateColor(st), stateGlyph(st, row.alive, row.hostAlive))} ${t.fg("accent", t.bold(row.meta.name))} ${t.fg("muted", `[${st}${row.alive ? " · alive" : ""}${row.hostAlive ? " · hosted" : ""}]`)}`);
+		out.push(`${stageFg(st, stateGlyph(st, row.alive, row.hostAlive))} ${t.fg("accent", t.bold(row.meta.name))} ${t.fg("muted", `[${st}${row.alive ? " · alive" : ""}${row.hostAlive ? " · hosted" : ""}]`)}`);
 		out.push(t.fg("dim", `  ${row.meta.repoCwd}${row.meta.worktreeMode === "worktree" ? "  (worktree)" : ""}`));
 		out.push("");
 		out.push(t.fg("muted", "Summary"));
@@ -830,7 +831,7 @@ export class DashboardComponent implements Component {
 		const st = rowState(row);
 		const out: string[] = [];
 		const session = loadSessionView(row.meta.sessionFile);
-		out.push(`${t.fg(stateColor(st), stateGlyph(st, row.alive, row.hostAlive))} ${t.fg("accent", t.bold(row.meta.name))} ${t.fg("muted", `[session view${row.alive ? " · live" : ""}${row.hostAlive ? " · hosted" : ""}]`)}`);
+		out.push(`${stageFg(st, stateGlyph(st, row.alive, row.hostAlive))} ${t.fg("accent", t.bold(row.meta.name))} ${t.fg("muted", `[session view${row.alive ? " · live" : ""}${row.hostAlive ? " · hosted" : ""}]`)}`);
 		out.push(t.fg("dim", `  ${row.meta.repoCwd}${row.meta.worktreeMode === "worktree" ? "  (worktree)" : ""}`));
 		if (session.header?.cwd && session.header.cwd !== row.meta.repoCwd) {
 			out.push(t.fg("dim", `  session cwd: ${session.header.cwd}`));
@@ -885,7 +886,7 @@ export class DashboardComponent implements Component {
 			["↑/↓", "Normal: move selection; Insert: move cursor"],
 			["ctrl/alt+←/→", "Jump by word in insert mode"],
 			["→ or >", "Attach to the selected real Pi session"],
-			["d", "Confirm and mark selected inactive session done / Completed"],
+			["d", "Confirm and mark selected inactive session done"],
 			["space", "Peek when input is empty"],
 			["tab", "Toggle worktree for the next dispatch"],
 			["/", "Filter in normal mode; use i then / for slash commands"],
@@ -967,12 +968,10 @@ function renderAgentboardHeader(
 	defaultCwd: string,
 ): string[] {
 	if (width < AGENTBOARD_HEADER_MIN_WIDTH) {
-		let summary = `${counts.needs} awaiting · ${counts.working} working · ${counts.completed} done`;
-		if (filterQuery) summary += ` · filter:${filterQuery}`;
 		const raw = [
 			...blankLines(HEADER_TOP_PADDING),
 			clip(`${" ".repeat(HEADER_LEFT_PADDING)}${ansiFg(56, 189, 248, "◉")} ${ansiFg(248, 250, 252, theme.bold("AgentBoard"))} ${ansiFg(148, 163, 184, AGENTBOARD_VERSION)}`, width),
-			clip(ansiFg(filterQuery ? 251 : 148, filterQuery ? 191 : 163, filterQuery ? 36 : 184, summary), width),
+			clip(headerStageSummary(theme, counts, filterQuery, true), width),
 			...blankLines(HEADER_BOTTOM_PADDING),
 		];
 		return raw.map((line, i) => headerBgLine(line, width, i));
@@ -996,7 +995,7 @@ function headerTextRows(theme: ThemeLike, row: Row | null, counts: HeaderCounts,
 	let contextPrefix = ansiFg(148, 163, 184, "Background Pi sessions");
 	if (row) {
 		const state = rowState(row);
-		contextPrefix = `${ansiFg(148, 163, 184, stateGlyph(state, row.alive, row.hostAlive))} ${ansiFg(226, 232, 240, row.meta.name)}`;
+		contextPrefix = `${stageFg(state, stateGlyph(state, row.alive, row.hostAlive))} ${ansiFg(226, 232, 240, row.meta.name)}`;
 		if (row.meta.defaultModel) contextBits.push(row.meta.defaultModel);
 		contextBits.push(GROUP_LABELS[state]);
 		if (row.alive) contextBits.push("live");
@@ -1005,13 +1004,41 @@ function headerTextRows(theme: ThemeLike, row: Row | null, counts: HeaderCounts,
 	}
 	const path = displayPath(row ? row.meta.repoCwd || row.meta.cwd : defaultCwd);
 	contextBits.push(path);
-	let summary = `${counts.needs} awaiting input · ${counts.working} working · ${counts.completed} completed`;
-	if (filterQuery) summary += ` · filter:${filterQuery}`;
 	return [
 		title,
 		`${contextPrefix} ${ansiFg(100, 116, 139, contextBits.join(" · "))}`,
-		ansiFg(filterQuery ? 251 : 148, filterQuery ? 191 : 163, filterQuery ? 36 : 184, summary),
+		headerStageSummary(theme, counts, filterQuery, false),
 	];
+}
+
+function headerStageSummary(theme: ThemeLike, counts: HeaderCounts, filterQuery: string, compact: boolean): string {
+	const joiner = theme.fg("dim", " · ");
+	const parts = [
+		headerStagePart(theme, "needs_input", counts.needs, compact ? "awaiting" : "awaiting input"),
+		headerStagePart(theme, "working", counts.working, "working"),
+		headerStagePart(theme, "completed", counts.completed, "done"),
+	];
+	if (filterQuery) parts.push(theme.fg("warning", `filter:${filterQuery}`));
+	return parts.join(joiner);
+}
+
+function headerStagePart(theme: ThemeLike, state: keyof typeof GROUP_LABELS, count: number, label: string): string {
+	return `${stageFg(state, String(count))} ${theme.fg("dim", label)}`;
+}
+
+const STAGE_RGB = {
+	queued: [148, 163, 184],
+	working: [56, 189, 248],
+	needs_input: [245, 158, 11],
+	idle: [129, 140, 248],
+	completed: [34, 197, 94],
+	failed: [248, 113, 113],
+	stopped: [100, 116, 139],
+} as const satisfies Record<keyof typeof GROUP_LABELS, readonly [number, number, number]>;
+
+function stageFg(state: keyof typeof GROUP_LABELS, text: string): string {
+	const [r, g, b] = STAGE_RGB[state];
+	return ansiFg(r, g, b, text);
 }
 
 function renderPiIconLine(line: string): string {
@@ -1113,14 +1140,14 @@ function isAgentBusy(row: Row): boolean {
 }
 
 function completedSummary(summary: string, _latestAssistantPreview: string): string {
-	const generic = new Set(["", "Queued", "Working…", "Idle", "Needs input", "Completed"]);
+	const generic = new Set(["", "Queued", "Working…", "Idle", "Needs input", "Completed", "Done"]);
 	if (!generic.has(summary.trim())) return compactCompletedSummary(summary);
-	return "Completed";
+	return "Done";
 }
 
 function compactCompletedSummary(text: string): string {
 	const cleaned = String(text || "").replace(/\s+/g, " ").trim();
-	if (!cleaned) return "Completed";
+	if (!cleaned) return "Done";
 	const first = firstSentence(cleaned);
 	return truncate(first.length >= 12 ? first : cleaned, 80);
 }

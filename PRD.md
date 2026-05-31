@@ -128,9 +128,11 @@ Each row should show at minimum:
 ### Row grouping
 V1 groups:
 
-- Needs input
+- Queued
 - Working
-- Completed
+- Needs input
+- Idle
+- Done
 
 Stretch:
 

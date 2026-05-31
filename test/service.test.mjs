@@ -49,6 +49,26 @@ test("archiveByState archives inactive rows and skips live rows", () => {
 	}
 });
 
+test("archive deletes an active or stuck queued row after confirmation", () => {
+	const root = freshRoot();
+	try {
+		createView(root, { id: "stuck", name: "stuck", cwd: "/r" });
+		const state = readState(root, "stuck");
+		state.semanticState = "queued";
+		state.processState = "alive";
+		state.summary = "Queued";
+		writeState(root, state);
+
+		assert.deepEqual(service(root).archive("stuck"), { ok: true });
+		assert.deepEqual(service(root).rows().map((r) => r.meta.id), []);
+		const archived = readState(root, "stuck");
+		assert.equal(archived.semanticState, "stopped");
+		assert.equal(archived.processState, "exited");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("attachTarget uses any live PTY host for fast attach", () => {
 	const root = freshRoot();
 	try {

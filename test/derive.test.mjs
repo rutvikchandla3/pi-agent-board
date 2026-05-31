@@ -86,7 +86,7 @@ test("deriveSummary falls back to preview then status text", () => {
 			error: null,
 			latestAssistantPreview: "",
 		}),
-		"Completed",
+		"Done",
 	);
 });
 
