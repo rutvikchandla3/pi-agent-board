@@ -701,7 +701,7 @@ export class DashboardComponent implements Component {
 			prompt: editing ? this.theme.fg("success", "┃ ") : this.theme.fg("muted", "› "),
 			continuation: editing ? this.theme.fg("success", "┃ ") : this.theme.fg("dim", "│ "),
 			editing,
-			placeholder: editing ? "" : "describe a task for a new session",
+			placeholder: editing ? "" : "press i to write a prompt for a new session",
 		});
 	}
 
