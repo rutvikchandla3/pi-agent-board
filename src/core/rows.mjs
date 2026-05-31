@@ -92,7 +92,7 @@ export function stateColor(state) {
  */
 export function rowView(row, now) {
 	const state = rowState(row);
-	const summary = row.state?.summary?.trim() || "—";
+	const summary = oneLine(row.state?.summary?.trim() || "—");
 	const lastActivityAt = row.state?.lastActivityAt ?? row.meta.updatedAt ?? row.meta.createdAt;
 	const worktree = row.meta.worktreeMode === "worktree";
 	const place = baseName(row.meta.repoCwd || row.meta.cwd) + (worktree ? "⌥" : "");
@@ -111,6 +111,11 @@ export function rowView(row, now) {
 		worktree,
 		lastActivityAt,
 	};
+}
+
+/** @param {string} text */
+function oneLine(text) {
+	return String(text || "").replace(/\s+/g, " ").trim() || "—";
 }
 
 /**

@@ -9,6 +9,7 @@ import { createRequire } from "node:module";
 import { createConnection } from "node:net";
 import { resolve } from "node:path";
 import { finalizeRun, projectViewState, reduceEvent } from "../core/events.mjs";
+import { firstSentence, truncate } from "../core/heuristics.mjs";
 import { newRunId, newViewId, slugifyTask } from "../core/ids.mjs";
 import { launchHost as launchHostProcess, launchRun } from "../core/launch.mjs";
 import { gitRepoRoot } from "../core/repo.mjs";
@@ -435,6 +436,30 @@ export function createService(opts) {
 		},
 
 		/**
+		 * Explicitly mark an inactive session as done/completed. Successful runs settle as
+		 * `idle` until the user reviews and confirms this action from the dashboard.
+		 * @param {string} viewId
+		 * @returns {{ ok: boolean, error?: string }}
+		 */
+		markCompleted(viewId) {
+			const row = loadRow(root, viewId);
+			if (!row) return { ok: false, error: "Unknown session" };
+			if (isAgentBusy(row)) return { ok: false, error: "Wait for the active run to finish before marking done" };
+			const state = row.state ?? blankState(viewId);
+			state.semanticState = "completed";
+			state.processState = "exited";
+			state.needsInput = false;
+			state.hasError = false;
+			state.question = null;
+			state.error = null;
+			state.summary = completionSummary(state);
+			state.lastActivityAt = Date.now();
+			state.updatedAt = Date.now();
+			writeState(root, state);
+			return { ok: true };
+		},
+
+		/**
 		 * Soft-delete a row: archive it (removed from the dashboard) but preserve the session
 		 * file. Optionally also remove its worktree (requires the caller's explicit confirm).
 		 * @param {string} viewId
@@ -549,6 +574,21 @@ export function createService(opts) {
 function isAgentBusy(row) {
 	const st = row.state?.semanticState;
 	return Boolean(row.alive && (st === "queued" || st === "working"));
+}
+
+/** @param {import("../core/types.mjs").ViewState} state */
+function completionSummary(state) {
+	const generic = new Set(["", "Queued", "Working…", "Idle", "Needs input", "Completed"]);
+	if (!generic.has(state.summary?.trim?.() ?? "")) return compactSummary(state.summary);
+	return "Completed";
+}
+
+/** @param {string} text */
+function compactSummary(text) {
+	const cleaned = String(text || "").replace(/\s+/g, " ").trim();
+	if (!cleaned) return "Completed";
+	const first = firstSentence(cleaned);
+	return truncate(first.length >= 12 ? first : cleaned, 80);
 }
 
 /**

@@ -152,10 +152,33 @@ test("syncForegroundEvent finalizes attached foreground turn from assistant outp
 		svc.syncForegroundEvent(meta.sessionFile, { type: "agent_end" });
 
 		const next = readState(root, "v1");
-		assert.equal(next.semanticState, "completed");
+		assert.equal(next.semanticState, "idle");
 		assert.equal(next.processState, "exited");
 		assert.equal(next.latestAssistantPreview, "All done.");
 		assert.equal(svc.row("v1").alive, false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("markCompleted explicitly moves an inactive session to completed", () => {
+	const root = freshRoot();
+	try {
+		createView(root, { id: "v1", name: "a", cwd: "/r" });
+		const s = readState(root, "v1");
+		s.semanticState = "idle";
+		s.processState = "exited";
+		s.summary = "All done.";
+		s.latestAssistantPreview = "All done.";
+		writeState(root, s);
+
+		assert.deepEqual(service(root).markCompleted("v1"), { ok: true });
+		const next = readState(root, "v1");
+		assert.equal(next.semanticState, "completed");
+		assert.equal(next.processState, "exited");
+		assert.equal(next.summary, "All done.");
+		assert.equal(next.needsInput, false);
+		assert.equal(next.hasError, false);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

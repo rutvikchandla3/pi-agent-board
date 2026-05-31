@@ -9,11 +9,11 @@
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import type { Component, EditorTheme, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { truncate } from "../core/heuristics.mjs";
+import { firstSentence, truncate } from "../core/heuristics.mjs";
 import { filterRows, groupRows, rowState, stateColor, stateGlyph } from "../core/rows.mjs";
 import { loadSessionView } from "../core/session-view.mjs";
 import { GROUP_LABELS } from "../core/types.mjs";
-import type { Row } from "../core/store.mjs";
+import { readState, writeState, type Row } from "../core/store.mjs";
 import type { createService } from "../runtime/service.mjs";
 
 type Service = ReturnType<typeof createService>;
@@ -203,6 +203,7 @@ export class DashboardComponent implements Component {
 		if (matchesKey(data, Key.ctrl("r"))) return this.startRename();
 		if (matchesKey(data, Key.ctrl("t"))) return this.togglePin();
 		if (matchesKey(data, Key.ctrl("s"))) return this.stopSelected();
+		if (data === "d") return this.confirmDone();
 		if (matchesKey(data, Key.ctrl("x"))) return this.confirmDelete();
 		if (data === "X") return this.confirmDeleteState();
 		if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
@@ -231,6 +232,7 @@ export class DashboardComponent implements Component {
 			return;
 		}
 		if (matchesKey(data, Key.enter) || data === "r") return this.startReply();
+		if (data === "d") return this.confirmDone();
 		if (data === "a") return this.attachPeek();
 	}
 
@@ -262,6 +264,7 @@ export class DashboardComponent implements Component {
 			this.startReply();
 			return;
 		}
+		if (data === "d") return this.confirmDone();
 		if (data === "a" || matchesKey(data, Key.enter)) return this.attachSelected();
 	}
 
@@ -270,7 +273,11 @@ export class DashboardComponent implements Component {
 			const action = this.pending?.onYes;
 			this.pending = null;
 			this.mode = "list";
-			action?.();
+			try {
+				action?.();
+			} catch (err) {
+				this.notice(err instanceof Error ? err.message : String(err), "error");
+			}
 			return;
 		}
 		// any other key cancels
@@ -421,6 +428,58 @@ export class DashboardComponent implements Component {
 		if (!row.alive && !row.hostAlive) return this.notice("No active run or host to stop", "warning");
 		const res = this.deps.service.stop(row.meta.id);
 		this.notice(res.ok ? "Stopping…" : (res.error ?? "Stop failed"), res.ok ? "info" : "warning");
+	}
+
+	private confirmDone(): void {
+		const row = this.selectedRow();
+		if (!row) return;
+		if (isAgentBusy(row)) return this.notice("Wait for the active run to finish before marking done", "warning");
+		if (row.state?.semanticState === "completed") return this.notice("Already marked done", "info");
+		this.pending = {
+			prompt: `Mark "${row.meta.name}" as done / Completed? (y/N)`,
+			onYes: () => {
+				const res = this.markCompleted(row);
+				if (!res.ok) this.notice(res.error ?? "Mark done failed", "error");
+				else this.notice("Marked done", "info");
+				this.refresh();
+			},
+		};
+		this.mode = "confirm";
+	}
+
+	private markCompleted(row: Row): { ok: boolean; error?: string } {
+		const service = this.deps.service as Service & { markCompleted?: (viewId: string) => { ok: boolean; error?: string } };
+		if (typeof service.markCompleted === "function") return service.markCompleted(row.meta.id);
+
+		// Compatibility guard for an already-open dashboard whose service object came
+		// from an older module instance. The service owns this path normally.
+		const state = readState(service.root, row.meta.id) ?? row.state ?? {
+			version: 1,
+			viewId: row.meta.id,
+			currentRunId: null,
+			semanticState: "idle",
+			processState: "exited",
+			summary: "Idle",
+			lastActivityAt: Date.now(),
+			updatedAt: Date.now(),
+			needsInput: false,
+			hasError: false,
+			latestAssistantPreview: "",
+			latestTool: null,
+			question: null,
+			error: null,
+		};
+		state.semanticState = "completed";
+		state.processState = "exited";
+		state.needsInput = false;
+		state.hasError = false;
+		state.question = null;
+		state.error = null;
+		state.summary = completedSummary(state.summary, state.latestAssistantPreview);
+		state.lastActivityAt = Date.now();
+		state.updatedAt = Date.now();
+		writeState(service.root, state);
+		return { ok: true };
 	}
 
 	private confirmDelete(): void {
@@ -606,7 +665,7 @@ export class DashboardComponent implements Component {
 			return this.hintLine("INSERT", "success", hints);
 		}
 		const primary = this.input.trim() ? "enter dispatch" : live ? "enter attach live" : "enter resume";
-		const hints = ["i insert", primary, "→ attach", "space peek", "v transcript", "ctrl+r rename", "ctrl+x delete", "X delete state", "/ filter", "? help"];
+		const hints = ["i insert", primary, "→ attach", "d done", "space peek", "v transcript", "ctrl+r rename", "ctrl+x delete", "X delete state", "/ filter", "? help"];
 		if (this.input.trim()) hints.splice(1, 0, "esc clear");
 		if (this.input.trim() || this.worktreeNext) hints.splice(this.input.trim() ? 3 : 2, 0, `tab worktree:${this.worktreeNext ? "on" : "off"}`);
 		return this.hintLine("NORMAL", "muted", hints);
@@ -759,7 +818,7 @@ export class DashboardComponent implements Component {
 			const notice = this.currentInputNotice();
 			if (notice) out.push(clip(t.fg(notice.color, `ⓘ ${notice.text}`), width));
 		} else {
-			out.push(clip(t.fg("dim", "↑↓ prev/next · →/> attach · v transcript · r reply · esc back"), width));
+			out.push(clip(t.fg("dim", "↑↓ prev/next · →/> attach · d done · v transcript · r reply · esc back"), width));
 		}
 		return out;
 	}
@@ -795,7 +854,7 @@ export class DashboardComponent implements Component {
 		const capacity = Math.max(3, (this.tui.terminal?.rows ?? 24) - out.length - 3);
 		out.push(...this.windowSession(body, capacity));
 		out.push(t.fg("dim", "─".repeat(width)));
-		out.push(clip(t.fg("dim", "←/< back · ↑↓ scroll · pgup/pgdn page · enter attach · r reply · space peek"), width));
+		out.push(clip(t.fg("dim", "←/< back · ↑↓ scroll · pgup/pgdn page · enter attach · d done · r reply · space peek"), width));
 		return out;
 	}
 
@@ -826,6 +885,7 @@ export class DashboardComponent implements Component {
 			["↑/↓", "Normal: move selection; Insert: move cursor"],
 			["ctrl/alt+←/→", "Jump by word in insert mode"],
 			["→ or >", "Attach to the selected real Pi session"],
+			["d", "Confirm and mark selected inactive session done / Completed"],
 			["space", "Peek when input is empty"],
 			["tab", "Toggle worktree for the next dispatch"],
 			["/", "Filter in normal mode; use i then / for slash commands"],
@@ -1050,6 +1110,19 @@ function wrap(text: string, width: number, max = 6): string[] {
 function isAgentBusy(row: Row): boolean {
 	const st = row.state?.semanticState;
 	return Boolean(row.alive && (st === "queued" || st === "working"));
+}
+
+function completedSummary(summary: string, _latestAssistantPreview: string): string {
+	const generic = new Set(["", "Queued", "Working…", "Idle", "Needs input", "Completed"]);
+	if (!generic.has(summary.trim())) return compactCompletedSummary(summary);
+	return "Completed";
+}
+
+function compactCompletedSummary(text: string): string {
+	const cleaned = String(text || "").replace(/\s+/g, " ").trim();
+	if (!cleaned) return "Completed";
+	const first = firstSentence(cleaned);
+	return truncate(first.length >= 12 ? first : cleaned, 80);
 }
 
 function displayPath(path: string): string {

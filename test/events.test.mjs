@@ -71,7 +71,7 @@ test("ignores unknown + header events", () => {
 	assert.equal(reduceEvent(s, null, 2000), false);
 });
 
-test("finalizeRun -> completed", () => {
+test("finalizeRun -> idle until user marks done", () => {
 	const s = createRunStatus(cfg(), 5, 1000);
 	reduceEvent(
 		s,
@@ -79,7 +79,7 @@ test("finalizeRun -> completed", () => {
 		2000,
 	);
 	finalizeRun(s, { exitCode: 0 }, 3000);
-	assert.equal(s.semanticState, "completed");
+	assert.equal(s.semanticState, "idle");
 	assert.equal(s.processState, "exited");
 	assert.equal(s.pid, null);
 	assert.equal(s.endedAt, 3000);

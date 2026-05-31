@@ -42,7 +42,7 @@ function makeConfig(root, viewId, runId, sessionFile, cwd, prompt) {
 	};
 }
 
-test("runner drives a fake worker to completion and writes durable artifacts", { timeout: 20000 }, async () => {
+test("runner drives a fake worker to idle and writes durable artifacts", { timeout: 20000 }, async () => {
 	const root = mkdtempSync(join(tmpdir(), "agentview-run-"));
 	const env = { ...process.env };
 	process.env.FAKE_PI_MODE = "completed";
@@ -65,7 +65,7 @@ test("runner drives a fake worker to completion and writes durable artifacts", {
 			return s && s.endedAt ? s : null;
 		});
 		assert.ok(status, "status reached terminal state");
-		assert.equal(status.semanticState, "completed");
+		assert.equal(status.semanticState, "idle");
 		assert.equal(status.processState, "exited");
 		assert.equal(status.exitCode, 0);
 		assert.ok(status.toolCount >= 1, "saw a tool execution");
@@ -76,7 +76,7 @@ test("runner drives a fake worker to completion and writes durable artifacts", {
 		assert.ok(existsSync(meta.sessionFile), "fake worker persisted the session file");
 
 		const state = readState(root, "view_1");
-		assert.equal(state.semanticState, "completed");
+		assert.equal(state.semanticState, "idle");
 		assert.equal(state.currentRunId, "run_1");
 	} finally {
 		delete process.env.FAKE_PI_MODE;

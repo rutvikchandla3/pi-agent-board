@@ -3,7 +3,7 @@
  *
  * Semantic-state rules (plan §9.1):
  *   while alive:   queued → working (once assistant/tool activity begins)
- *   clean exit:    needs_input (asked a question) | completed | idle
+ *   clean exit:    needs_input (asked a question) | idle (user can mark completed)
  *   bad exit:      failed
  *   user stop:     stopped
  * Summary priority (plan §9.3): model → active tool → blocker → first sentence → error → fallback.
@@ -15,16 +15,15 @@ import { firstSentence, truncate } from "./heuristics.mjs";
 
 /**
  * Compute the terminal semantic state for a finished run.
- * @param {{ exitCode:number|null, stopReason:string|null, stoppedByUser:boolean, needsInput:boolean, openEnded?:boolean }} p
+ * @param {{ exitCode:number|null, stopReason:string|null, stoppedByUser:boolean, needsInput:boolean }} p
  * @returns {SemanticState}
  */
-export function finalizeSemanticState({ exitCode, stopReason, stoppedByUser, needsInput, openEnded = false }) {
+export function finalizeSemanticState({ exitCode, stopReason, stoppedByUser, needsInput }) {
 	if (stoppedByUser) return "stopped";
 	const errored = (exitCode != null && exitCode !== 0) || stopReason === "error" || stopReason === "aborted";
 	if (errored) return "failed";
 	if (needsInput) return "needs_input";
-	if (openEnded) return "idle";
-	return "completed";
+	return "idle";
 }
 
 /**

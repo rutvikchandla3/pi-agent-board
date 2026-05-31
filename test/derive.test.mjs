@@ -5,7 +5,7 @@ import { deriveSummary, fallbackStatusText, finalizeSemanticState } from "../src
 test("finalizeSemanticState matrix", () => {
 	assert.equal(
 		finalizeSemanticState({ exitCode: 0, stopReason: "stop", stoppedByUser: false, needsInput: false }),
-		"completed",
+		"idle",
 	);
 	assert.equal(
 		finalizeSemanticState({ exitCode: 0, stopReason: "stop", stoppedByUser: false, needsInput: true }),
