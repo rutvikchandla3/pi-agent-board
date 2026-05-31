@@ -1,4 +1,4 @@
-# PRD: Pi Agent View Extension
+# PRD: Pi Agent Board Extension
 
 **Status:** Draft  
 **Last Updated:** 2026-05-30  
@@ -6,7 +6,7 @@
 
 ## 1. Summary
 
-Build a Pi extension that delivers a Claude Code agent-view-like experience inside Pi: a single terminal UI to dispatch, monitor, reply to, attach to, and manage multiple **background Pi sessions**.
+Build a Pi extension that delivers a Claude Code agent-view-like experience inside Pi, packaged as **Pi Agent Board**: a single terminal UI to dispatch, monitor, reply to, attach to, and manage multiple **background Pi sessions**.
 
 Each row in the view must represent a **real Pi session** with persisted history and resumable state, not just a transient subagent job.
 
@@ -15,16 +15,16 @@ Each row in the view must represent a **real Pi session** with persisted history
 These decisions were confirmed on 2026-05-30 and are part of the MVP contract:
 
 - dashboard is **global across projects** by default,
-- `/agents` is the required MVP entry point,
+- `/agent-board` is the required MVP entry point,
 - implementation should remain extensible for a future `/bg` flow,
 - attaching to a running background session should **interrupt with confirmation, then attach**,
 - same-repo parallel writer sessions must **require worktree isolation**,
 - MVP may use a **cheap model summarizer**,
-- returning to the dashboard via `/agents` is acceptable for MVP.
+- returning to the dashboard via `/agent-board` is acceptable for MVP.
 
 ## 2. Problem
 
-Pi has strong primitives for sessions, extensions, tools, TUI components, and subagents, but it does **not** have a first-class built-in agent view. Today, users must manually juggle sessions and subagents and cannot easily:
+Pi has strong primitives for sessions, extensions, tools, TUI components, and subagents, but it does **not** have a first-class built-in agent board. Today, users must manually juggle sessions and subagents and cannot easily:
 
 - see all active/background work in one place,
 - know which session needs input,
@@ -34,7 +34,7 @@ Pi has strong primitives for sessions, extensions, tools, TUI components, and su
 
 ## 3. Product Goal
 
-Provide a Pi-native “agent view” that feels behaviorally equivalent to Claude’s agent view where Pi’s extension APIs allow it.
+Provide a Pi-native “agent board” that feels behaviorally equivalent to Claude’s agent board where Pi’s extension APIs allow it.
 
 The product should let a user:
 
@@ -94,8 +94,8 @@ A Pi power user working on several independent coding tasks at once.
 
 V1 should support:
 
-- `/agents` — open the dashboard from within Pi.
-- Optional extension flag such as `--agent-view` if practical.
+- `/agent-board` — open the dashboard from within Pi.
+- Optional extension flag such as `--agent-board` if practical.
 
 Stretch goals:
 
@@ -200,12 +200,12 @@ It should support:
 Attaching opens the full interactive Pi session for that row’s session file.
 
 ### Detach
-Detaching returns the user to agent view without losing session state.
+Detaching returns the user to agent board without losing session state.
 
 V1 requirement:
 
 - attaching must work,
-- detaching back to agent view must work at least from an idle/known-safe state.
+- detaching back to agent board must work at least from an idle/known-safe state.
 
 Stretch:
 
@@ -337,12 +337,12 @@ This means:
 
 - child Pi processes should run in JSON/print-style non-interactive mode,
 - child sessions do not own UI,
-- parent agent view owns all live visualization and state aggregation.
+- parent agent board owns all live visualization and state aggregation.
 
 ## 10. Suggested Architecture
 
 ### Option A — recommended
-Build a **session-oriented background engine** specifically for agent view.
+Build a **session-oriented background engine** specifically for agent board.
 
 Components:
 
@@ -375,7 +375,7 @@ Why: high leverage, lower coupling.
 
 ### Included in MVP
 
-- `/agents` dashboard
+- `/agent-board` dashboard
 - global cross-project session view by default
 - persisted roster/store
 - create background Pi sessions
@@ -402,7 +402,7 @@ Why: high leverage, lower coupling.
 - Persistent store format
 - Worker launcher
 - Event parser
-- `/agents` TUI
+- `/agent-board` TUI
 - Dispatch + live updates
 
 ### Phase 2 — interactive workflow
@@ -427,7 +427,7 @@ Why: high leverage, lower coupling.
 
 The PRD is satisfied for MVP when:
 
-1. A user can open `/agents` and see a dashboard UI.
+1. A user can open `/agent-board` and see a dashboard UI.
 2. A user can dispatch a new background coding task from the dashboard.
 3. The task creates a real persisted Pi session file.
 4. The row updates while the background worker runs.
@@ -450,10 +450,10 @@ Initial success measures:
 ## 15. Risks / Open Questions
 
 1. **Detach semantics**  
-   How close can we get to Claude’s “return to agent view” behavior using only extension/session APIs?
+   How close can we get to Claude’s “return to agent board” behavior using only extension/session APIs?
 
 2. **Top-level launch experience**  
-   Is `/agents` enough, or do we need a true standalone startup path?
+   Is `/agent-board` enough, or do we need a true standalone startup path?
 
 3. **Worktree timing**  
    Should worktrees be created at dispatch time or lazily on first mutation?
@@ -479,6 +479,6 @@ Pi implementation references:
 
 ## 17. Recommendation
 
-Proceed with a **session-oriented agent-view extension** as the primary implementation path.
+Proceed with a **session-oriented agent-board extension** as the primary implementation path.
 
 Do **not** treat this as a UI wrapper over `pi-subagents`. Use `pi-subagents` as a source of implementation ideas, but build the actual product around persisted Pi sessions, a parent-owned dashboard, and a lightweight supervisor/store.

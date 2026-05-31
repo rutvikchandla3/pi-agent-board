@@ -166,12 +166,12 @@ function main() {
 	});
 }
 
-/** Default cheap model for terminal summaries. Override/disable via $AGENT_VIEW_SUMMARY_MODEL. */
+/** Default cheap model for terminal summaries. Override/disable via $AGENT_BOARD_SUMMARY_MODEL. */
 const DEFAULT_SUMMARY_MODEL = "gpt-4o";
 
 /**
  * Cheap-model summary, ON BY DEFAULT (uses {@link DEFAULT_SUMMARY_MODEL}; override with
- * $AGENT_VIEW_SUMMARY_MODEL=<model>, disable with $AGENT_VIEW_SUMMARY_MODEL=off). Overrides
+ * $AGENT_BOARD_SUMMARY_MODEL=<model>, disable with $AGENT_BOARD_SUMMARY_MODEL=off). Overrides
  * status.summary with a short model-generated line. On any failure (no API key, model
  * unavailable, timeout) it silently keeps the heuristic summary already in status.summary.
  * @param {import("../src/core/types.mjs").RunConfig} config
@@ -179,7 +179,7 @@ const DEFAULT_SUMMARY_MODEL = "gpt-4o";
  * @returns {Promise<boolean>} whether the summary was upgraded.
  */
 async function maybeModelSummary(config, status) {
-	const configured = process.env.AGENT_VIEW_SUMMARY_MODEL;
+	const configured = process.env.AGENT_BOARD_SUMMARY_MODEL ?? process.env.AGENT_VIEW_SUMMARY_MODEL;
 	if (configured === "off") return false;
 	const model = configured || DEFAULT_SUMMARY_MODEL;
 	if (status.semanticState === "failed" || status.semanticState === "stopped") return false;

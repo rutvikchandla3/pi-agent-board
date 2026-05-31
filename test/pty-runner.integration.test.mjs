@@ -44,7 +44,7 @@ test("pty-runner creates host socket, broadcasts output, forwards input, finaliz
 			piArgsPrefix: [resolve("test-support/fake-pty-pi.mjs")],
 			model: null,
 			tools: null,
-			env: { AGENT_VIEW_ALLOW_PIPE_FALLBACK: "1" },
+			env: { AGENT_BOARD_ALLOW_PIPE_FALLBACK: "1" },
 			cols: 80,
 			rows: 24,
 		});

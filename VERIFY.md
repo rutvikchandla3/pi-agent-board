@@ -8,9 +8,10 @@ Steps you can run yourself to check the extension. Grouped from "no auth needed"
 ## 0. Static checks (no auth, fast)
 
 ```bash
-npm install          # dev deps: typescript, @types/node
+npm install          # dev + runtime deps
 npm run typecheck    # expect: 0 errors
-npm test             # expect: tests 45 / pass 45 / fail 0
+npm test             # expect: 0 failures
+npm run pack:dry     # expect: pi-agent-board-<version>.tgz contents only include deploy files
 ```
 
 `npm test` includes a hermetic integration test that runs the **real detached runner** against
@@ -48,11 +49,19 @@ pi --mode json -p --no-session "Reply with exactly: DONE" | tail -n 20
 
 ## 3. Install the extension for normal use
 
-Symlink the repo into pi's global extensions dir (auto-discovered via the top-level `index.ts`):
+For a local checkout, install it as a Pi package:
 ```bash
-ln -s "$(pwd)" ~/.pi/agent/extensions/agent-view
+pi install "$(pwd)"
 ```
-Or add its path under `extensions` in `~/.pi/agent/settings.json`. Then start pi normally:
+Or symlink the repo into pi's global extensions dir (auto-discovered via the top-level `index.ts`):
+```bash
+ln -s "$(pwd)" ~/.pi/agent/extensions/agent-board
+```
+After publish, install with:
+```bash
+pi install npm:pi-agent-board
+```
+Then start pi normally:
 ```bash
 pi
 ```
@@ -60,32 +69,32 @@ pi
 ## 4. Drive the dashboard
 
 Inside pi:
-1. Type `/agents` (or press **Ctrl+G**), or start with `pi --agent-view` → the full-screen dashboard opens.
-   - With `pi --agent-view`, quitting the dashboard exits Pi instead of dropping you into a normal chat session.
-   - The startup path should feel cleaner than `/agents`: no normal Pi header/footer chrome and no dispatch notifications above the dashboard.
+1. Type `/agent-board`, or start with `pi --agent-board` → the full-screen dashboard opens.
+   - With `pi --agent-board`, quitting the dashboard exits Pi instead of dropping you into a normal chat session.
+   - The startup path should feel cleaner than `/agent-board`: no normal Pi header/footer chrome and no dispatch notifications above the dashboard.
 2. Type a task in the bottom input (e.g. `list the files in this repo and summarize the README`), then press **Enter**.
    - A row appears and moves `Queued → Working → Done` (needs step 2 healthy).
 3. **space** = peek when the input is empty (summary, blocker, latest output); in peek **r** = reply, **a** = attach.
    **→** / **>** = open a full-screen live session view without interrupting; **←** / **<** returns.
 4. **enter** on an empty input = attach to the selected full session (confirms first if it's still running).
-   You're now in the real Pi session; run `/agents` again to return.
+   You're now in the real Pi session; run `/agent-board` again to return.
 5. Other keys: **/** filter (`s:working`, or free text), **Ctrl+R** rename, **Ctrl+T** pin, **Ctrl+S** stop,
    **Ctrl+X** delete (archives the row, keeps the session file), **?** help, **Esc** clears input / quits when empty.
 
 ## 5. Inspect the durable store on disk
 
 ```bash
-ls -R ~/.pi/agent/agent-view
-cat ~/.pi/agent/agent-view/roster.json
-cat ~/.pi/agent/agent-view/views/*/state.json
-cat ~/.pi/agent/agent-view/views/*/runs/*/status.json
+ls -R ~/.pi/agent/agent-board
+cat ~/.pi/agent/agent-board/roster.json
+cat ~/.pi/agent/agent-board/views/*/state.json
+cat ~/.pi/agent/agent-board/views/*/runs/*/status.json
 # raw worker event stream for a run:
-cat ~/.pi/agent/agent-view/views/*/runs/*/events.jsonl
+cat ~/.pi/agent/agent-board/views/*/runs/*/events.jsonl
 ```
 
 ## 6. Recovery / persistence
 
-- Start a dispatch, then quit pi (or `/reload`). Re-open pi and `/agents` — the row is still
+- Start a dispatch, then quit pi (or `/reload`). Re-open pi and `/agent-board` — the row is still
   there with its last state (rehydrated from disk). If a run's runner died without finishing,
   the dashboard reconciles it to `failed (runner exited)` on open.
 
@@ -93,11 +102,11 @@ cat ~/.pi/agent/agent-view/views/*/runs/*/events.jsonl
 
 - Dispatch one writer task in a git repo, then (while it's running) dispatch a second in the
   **same repo**. The second is auto-isolated into its own git worktree (under
-  `~/.pi/agent/agent-view/worktrees/<viewId>`) so the two can't clobber each other. In dispatch
+  `~/.pi/agent/agent-board/worktrees/<viewId>`) so the two can't clobber each other. In dispatch
   mode you can also press **Tab** to force a worktree.
 
 ## 8. Summary model
 
-Default summary model is **gpt-4o** (override `AGENT_VIEW_SUMMARY_MODEL=<model>`, disable with
-`AGENT_VIEW_SUMMARY_MODEL=off`). It needs OpenAI auth; without it the row keeps its heuristic
+Default summary model is **gpt-4o** (override `AGENT_BOARD_SUMMARY_MODEL=<model>`, disable with
+`AGENT_BOARD_SUMMARY_MODEL=off`; legacy `AGENT_VIEW_SUMMARY_MODEL` is also honored). It needs OpenAI auth; without it the row keeps its heuristic
 summary (e.g. the first sentence of the agent's last message or the active tool).

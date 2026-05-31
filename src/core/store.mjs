@@ -1,5 +1,5 @@
 /**
- * High-level store operations over the agent-view layout (see paths.mjs).
+ * High-level store operations over the agent-board layout (see paths.mjs).
  * Roster/meta/state/status read+write, row listing, and view creation/recovery.
  * Used by the extension, the runner, and tests. Pure node, no Pi imports.
  */
@@ -223,7 +223,7 @@ export function createView(root, opts) {
 		worktreePath: opts.worktreePath ?? null,
 		writeCapable: opts.writeCapable ?? true,
 		archived: false,
-		source: "agent-view",
+		source: "agent-board",
 	};
 	ensureDir(P.viewDir(root, meta.id));
 	writeMeta(root, meta);

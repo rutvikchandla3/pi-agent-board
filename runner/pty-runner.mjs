@@ -85,6 +85,11 @@ function main() {
 	const env = {
 		...process.env,
 		...(config.env || {}),
+		AGENT_BOARD_ROOT: config.root,
+		AGENT_BOARD_VIEW_ID: config.viewId,
+		AGENT_BOARD_CHILD: "1",
+		AGENT_BOARD_HOSTED: "pty",
+		// Legacy names are exported too so older child extension builds still behave.
 		AGENT_VIEW_ROOT: config.root,
 		AGENT_VIEW_VIEW_ID: config.viewId,
 		AGENT_VIEW_CHILD: "1",
@@ -98,7 +103,7 @@ function main() {
 			env,
 			cols: host.cols,
 			rows: host.rows,
-			allowPipeFallback: config.env?.AGENT_VIEW_ALLOW_PIPE_FALLBACK === "1",
+			allowPipeFallback: config.env?.AGENT_BOARD_ALLOW_PIPE_FALLBACK === "1" || config.env?.AGENT_VIEW_ALLOW_PIPE_FALLBACK === "1",
 		});
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
@@ -299,7 +304,7 @@ function markRowFailed(root, viewId, message) {
 }
 
 function failEarly(message) {
-	try { appendLine("/tmp/pi-agent-view-pty-runner.err", message); } catch {}
+	try { appendLine("/tmp/pi-agent-board-pty-runner.err", message); } catch {}
 	process.stderr.write(`${message}\n`);
 	process.exit(2);
 }

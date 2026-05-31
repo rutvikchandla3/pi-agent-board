@@ -60,5 +60,5 @@ export function removeWorktree(repoRoot, worktreePath) {
  * @returns {string}
  */
 export function worktreeBranch(viewId) {
-	return `agent-view/${viewId}`;
+	return `agent-board/${viewId}`;
 }

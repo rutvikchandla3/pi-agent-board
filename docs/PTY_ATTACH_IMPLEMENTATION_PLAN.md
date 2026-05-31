@@ -1,7 +1,7 @@
 # Implementation Plan: PTY-backed Live Attach
 
 **Status:** Proposed / spike-ready  
-**Goal:** make attaching to a live agent-view row feel like attaching to the same normal Pi session, without interrupting the running work.  
+**Goal:** make attaching to a live agent-board row feel like attaching to the same normal Pi session, without interrupting the running work.  
 **Created:** 2026-05-31
 
 ## 1. Decision
@@ -44,9 +44,9 @@ Dashboard
 
 - `src/runtime/service.mjs` already owns dispatch/reply/stop/archive and same-repo worktree safety.
 - `runner/job-runner.mjs` already demonstrates detached durable process ownership.
-- Store layout under `~/.pi/agent/agent-view/` is sound: `views/<id>/meta.json`, `state.json`, per-run artifacts, session file per row.
+- Store layout under `~/.pi/agent/agent-board/` is sound: `views/<id>/meta.json`, `state.json`, per-run artifacts, session file per row.
 - `src/index.ts` already mirrors foreground session events into managed row state via `service.syncForegroundEvent(...)`.
-- `src/commands/agents.ts` already owns attach and back-to-dashboard behavior.
+- `src/commands/agent-board.ts` already owns attach and back-to-dashboard behavior.
 - `src/ui/dashboard.ts` already has list/peek/reply/session modes and can add a new attach mode/result.
 
 ### Important mismatch in current state model
@@ -77,7 +77,7 @@ Therefore there are three implementation options:
 |---|---|---:|---:|---|
 | A | PTY + terminal emulator component (`xterm-headless` style) | high, not perfect | yes | try first |
 | B | Pi core raw terminal takeover API | highest | requires Pi core change | later if needed |
-| C | standalone/tmux-like external agent-view CLI | highest | separate CLI, not pure `/agents` | fallback |
+| C | standalone/tmux-like external agent-board CLI | highest | separate CLI, not pure `/agent-board` | fallback |
 
 This plan attempts **Option A** first because it preserves the extension flow and avoids rebuilding the agent protocol/UI. It runs real Pi, captures its PTY output, and renders a virtual terminal buffer inside `ctx.ui.custom()`.
 
@@ -85,7 +85,7 @@ This plan attempts **Option A** first because it preserves the extension flow an
 
 ```text
               ┌──────────────────────────────┐
-              │ Parent Pi / /agents dashboard │
+              │ Parent Pi / /agent-board dashboard │
               └──────────────┬───────────────┘
                              │ dispatch
                              ▼
@@ -104,10 +104,10 @@ This plan attempts **Option A** first because it preserves the extension flow an
 └────────────────────────────────────────────────────────────┘
                              ▲
                              │ child extension events write row state
-                             │ AGENT_VIEW_ROOT / AGENT_VIEW_VIEW_ID
+                             │ AGENT_BOARD_ROOT / AGENT_BOARD_VIEW_ID
                              │
               ┌──────────────┴───────────────┐
-              │ agent-view extension in child │
+              │ agent-board extension in child │
               │ mirrors agent/tool/message    │
               │ events to state.json          │
               └──────────────────────────────┘
@@ -246,13 +246,13 @@ if (initialPrompt) args.push(initialPrompt);
 Environment injected into child Pi:
 
 ```text
-AGENT_VIEW_ROOT=<root>
-AGENT_VIEW_VIEW_ID=<viewId>
-AGENT_VIEW_CHILD=1
-AGENT_VIEW_HOSTED=pty
+AGENT_BOARD_ROOT=<root>
+AGENT_BOARD_VIEW_ID=<viewId>
+AGENT_BOARD_CHILD=1
+AGENT_BOARD_HOSTED=pty
 ```
 
-`AGENT_VIEW_CHILD=1` lets the extension avoid dashboard-first startup behavior and any recursive agent-view UI side effects inside hosted children.
+`AGENT_BOARD_CHILD=1` lets the extension avoid dashboard-first startup behavior and any recursive agent-board UI side effects inside hosted children.
 
 ### 5.3 Control socket protocol
 
@@ -333,16 +333,16 @@ This would give true terminal proxy behavior, but requires Pi core work outside 
 
 Current extension mirrors events for any managed foreground session. Adjust it for hosted child processes:
 
-- if `process.env.AGENT_VIEW_CHILD === "1"`, skip `--agent-view` dashboard auto-open handling,
+- if `process.env.AGENT_BOARD_CHILD === "1"`, skip `--agent-board` dashboard auto-open handling,
 - still register event listeners,
-- when `AGENT_VIEW_VIEW_ID` is present, mirror events directly to that row,
+- when `AGENT_BOARD_VIEW_ID` is present, mirror events directly to that row,
 - keep footer status disabled/no-op in child to avoid confusing nested hosted Pi.
 
 Potential helper:
 
 ```ts
-const hostedViewId = process.env.AGENT_VIEW_VIEW_ID;
-const isHostedChild = process.env.AGENT_VIEW_CHILD === "1";
+const hostedViewId = process.env.AGENT_BOARD_VIEW_ID;
+const isHostedChild = process.env.AGENT_BOARD_CHILD === "1";
 ```
 
 ### 7.2 `src/runtime/service.mjs`
@@ -382,7 +382,7 @@ Stop flow needs two actions:
 
 Existing `ctrl+s stop` should initially mean “interrupt/stop active work”; add a separate confirm for killing host if needed.
 
-### 7.3 `src/commands/agents.ts`
+### 7.3 `src/commands/agent-board.ts`
 
 Change attach decision:
 
@@ -484,7 +484,7 @@ Tasks:
 3. Verify Pi runs initial prompt and remains interactive afterward.
 4. Build tiny `ctx.ui.custom` component that renders a fake ANSI stream through a terminal emulator.
 5. Confirm parent Pi TUI can render the virtual terminal without corrupting its own screen.
-6. Confirm child extension can mirror events via `AGENT_VIEW_ROOT/VIEW_ID`.
+6. Confirm child extension can mirror events via `AGENT_BOARD_ROOT/VIEW_ID`.
 
 Exit criteria:
 
@@ -519,7 +519,7 @@ If this fails due to public TUI limitations, switch to Option B/C instead of for
 - Intercept detach chord.
 - Forward all other input bytes.
 - Handle resize.
-- Integrate into `/agents` attach flow.
+- Integrate into `/agent-board` attach flow.
 
 ### Phase 5 — reply/stop behavior
 
@@ -545,7 +545,7 @@ MVP live attach is accepted when:
 2. Dashboard shows the row working via child extension event mirroring.
 3. Pressing attach while work is live opens the hosted session without interrupting it.
 4. User can type normally into the attached Pi session.
-5. Slash commands like `/session`, `/model`, `/tree` are handled by the child Pi, not reimplemented by agent-view.
+5. Slash commands like `/session`, `/model`, `/tree` are handled by the child Pi, not reimplemented by agent-board.
 6. Detach returns to dashboard and child Pi keeps running.
 7. Reattach returns to the same live child Pi process.
 8. If the host dies, attach falls back to `ctx.switchSession(sessionFile)`.
@@ -557,7 +557,7 @@ MVP live attach is accepted when:
 |---|---|---|
 | `ctx.ui.custom` cannot faithfully render child terminal output | high | Phase 0 spike; fallback to Pi core raw takeover API or standalone CLI |
 | `node-pty` native install friction | medium | keep JSON runner fallback; document dependency; consider tmux fallback |
-| child Pi extension recursion | medium | `AGENT_VIEW_CHILD=1`; skip dashboard auto-open/footer in child |
+| child Pi extension recursion | medium | `AGENT_BOARD_CHILD=1`; skip dashboard auto-open/footer in child |
 | host liveness conflated with agent activity | high | add `host.json`; separate `hostAlive` from `row.alive` |
 | worktree safety too conservative with idle hosts | low/medium | conservative MVP, later refine with activity state |
 | detach chord conflicts with Pi keybindings | low | configurable later; start with `ctrl+]` |
@@ -576,4 +576,4 @@ Do **Phase 0 only** first. Do not refactor the whole service until we prove that
 If Phase 0 passes, proceed with phases 1–6. If it fails, stop and design either:
 
 1. a small Pi core raw-terminal takeover API, or
-2. a standalone `pi-agent-view` CLI that owns the terminal like tmux.
+2. a standalone `pi-agent-board` CLI that owns the terminal like tmux.

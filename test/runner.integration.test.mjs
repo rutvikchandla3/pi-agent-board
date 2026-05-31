@@ -46,7 +46,7 @@ test("runner drives a fake worker to idle and writes durable artifacts", { timeo
 	const root = mkdtempSync(join(tmpdir(), "agentview-run-"));
 	const env = { ...process.env };
 	process.env.FAKE_PI_MODE = "completed";
-	process.env.AGENT_VIEW_SUMMARY_MODEL = "off";
+	process.env.AGENT_BOARD_SUMMARY_MODEL = "off";
 	try {
 		const meta = createView(root, { id: "view_1", name: "fix", cwd: root });
 		const config = makeConfig(root, "view_1", "run_1", meta.sessionFile, root, "fix the bug");
@@ -80,8 +80,8 @@ test("runner drives a fake worker to idle and writes durable artifacts", { timeo
 		assert.equal(state.currentRunId, "run_1");
 	} finally {
 		delete process.env.FAKE_PI_MODE;
-		delete process.env.AGENT_VIEW_SUMMARY_MODEL;
-		Object.assign(process.env, { AGENT_VIEW_SUMMARY_MODEL: env.AGENT_VIEW_SUMMARY_MODEL });
+		delete process.env.AGENT_BOARD_SUMMARY_MODEL;
+		Object.assign(process.env, { AGENT_BOARD_SUMMARY_MODEL: env.AGENT_BOARD_SUMMARY_MODEL });
 		rmSync(root, { recursive: true, force: true });
 	}
 });
@@ -89,7 +89,7 @@ test("runner drives a fake worker to idle and writes durable artifacts", { timeo
 test("runner classifies a question as needs_input", { timeout: 20000 }, async () => {
 	const root = mkdtempSync(join(tmpdir(), "agentview-run-ni-"));
 	process.env.FAKE_PI_MODE = "needs_input";
-	process.env.AGENT_VIEW_SUMMARY_MODEL = "off";
+	process.env.AGENT_BOARD_SUMMARY_MODEL = "off";
 	try {
 		const meta = createView(root, { id: "v", name: "x", cwd: root });
 		const config = makeConfig(root, "v", "r", meta.sessionFile, root, "do it");
@@ -103,7 +103,7 @@ test("runner classifies a question as needs_input", { timeout: 20000 }, async ()
 		assert.ok(status.question, "extracted a question");
 	} finally {
 		delete process.env.FAKE_PI_MODE;
-		delete process.env.AGENT_VIEW_SUMMARY_MODEL;
+		delete process.env.AGENT_BOARD_SUMMARY_MODEL;
 		rmSync(root, { recursive: true, force: true });
 	}
 });
@@ -111,7 +111,7 @@ test("runner classifies a question as needs_input", { timeout: 20000 }, async ()
 test("runner marks failed when the worker exits nonzero", { timeout: 20000 }, async () => {
 	const root = mkdtempSync(join(tmpdir(), "agentview-run-fail-"));
 	process.env.FAKE_PI_MODE = "fail";
-	process.env.AGENT_VIEW_SUMMARY_MODEL = "off";
+	process.env.AGENT_BOARD_SUMMARY_MODEL = "off";
 	try {
 		const meta = createView(root, { id: "v", name: "x", cwd: root });
 		const config = makeConfig(root, "v", "r", meta.sessionFile, root, "do it");
@@ -125,7 +125,7 @@ test("runner marks failed when the worker exits nonzero", { timeout: 20000 }, as
 		assert.notEqual(status.exitCode, 0);
 	} finally {
 		delete process.env.FAKE_PI_MODE;
-		delete process.env.AGENT_VIEW_SUMMARY_MODEL;
+		delete process.env.AGENT_BOARD_SUMMARY_MODEL;
 		rmSync(root, { recursive: true, force: true });
 	}
 });
@@ -133,7 +133,7 @@ test("runner marks failed when the worker exits nonzero", { timeout: 20000 }, as
 test("stopping the runner finalizes the run as stopped", { timeout: 20000 }, async () => {
 	const root = mkdtempSync(join(tmpdir(), "agentview-run-stop-"));
 	process.env.FAKE_PI_MODE = "hang";
-	process.env.AGENT_VIEW_SUMMARY_MODEL = "off";
+	process.env.AGENT_BOARD_SUMMARY_MODEL = "off";
 	try {
 		const meta = createView(root, { id: "v", name: "x", cwd: root });
 		const config = makeConfig(root, "v", "r", meta.sessionFile, root, "do it");
@@ -158,7 +158,7 @@ test("stopping the runner finalizes the run as stopped", { timeout: 20000 }, asy
 		assert.equal(status.semanticState, "stopped");
 	} finally {
 		delete process.env.FAKE_PI_MODE;
-		delete process.env.AGENT_VIEW_SUMMARY_MODEL;
+		delete process.env.AGENT_BOARD_SUMMARY_MODEL;
 		rmSync(root, { recursive: true, force: true });
 	}
 });

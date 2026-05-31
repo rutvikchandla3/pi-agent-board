@@ -1,5 +1,5 @@
 /**
- * Shared data shapes for the agent-view store. JSDoc typedefs (consumed by the TS
+ * Shared data shapes for the agent-board store. JSDoc typedefs (consumed by the TS
  * extension via `allowJs`) plus the canonical state vocabularies as runtime constants.
  */
 
@@ -63,7 +63,7 @@ export const GROUP_LABELS = {
  * @property {string|null} worktreePath
  * @property {boolean} writeCapable      Whether this session may mutate files (default true).
  * @property {boolean} archived          Soft-deleted from the dashboard (data preserved).
- * @property {"agent-view"} source
+ * @property {"agent-board"} source
  */
 
 /**

@@ -1,4 +1,4 @@
-# Implementation Plan: Pi Agent View Extension
+# Implementation Plan: Pi Agent Board Extension
 
 **Status:** Draft  
 **Depends on:** `PRD.md`  
@@ -48,12 +48,12 @@ Key references already validated:
 These decisions are now considered part of the MVP contract unless changed explicitly later.
 
 1. **Dashboard scope is global across projects by default.**
-2. **Primary MVP entry point is `/agents`.**
+2. **Primary MVP entry point is `/agent-board`.**
 3. **Design should stay extensible for a future `/bg` flow.**
 4. **Attaching to a running background session should interrupt with confirmation, then attach.**
 5. **Same-repo parallel writer sessions require worktree isolation.**
 6. **MVP may use a cheap model summarizer, with heuristics as fallback.**
-7. **Returning to the dashboard via `/agents` is acceptable for MVP.**
+7. **Returning to the dashboard via `/agent-board` is acceptable for MVP.**
 
 ---
 
@@ -66,7 +66,7 @@ We will build a **session-oriented background dashboard** for Pi.
 Each dashboard row will represent:
 
 - a real Pi session file,
-- persisted agent-view metadata,
+- persisted agent-board metadata,
 - one active or inactive background run history,
 - resumable state even after the worker exits.
 
@@ -122,7 +122,7 @@ We can reach useful Claude-like behavior without paying that cost up front.
 
 ```text
 Pi Extension (interactive parent)
-  ├─ /agents command
+  ├─ /agent-board command
   ├─ dashboard TUI
   ├─ peek panel UI
   ├─ store reader/writer
@@ -182,7 +182,7 @@ The Pi worker will:
 
 User runs:
 
-- `/agents`
+- `/agent-board`
 
 Result:
 
@@ -220,7 +220,7 @@ Result:
 
 MVP baseline:
 
-- user runs `/agents` again from attached session.
+- user runs `/agent-board` again from attached session.
 
 Stretch:
 
@@ -252,7 +252,7 @@ src/
   index.ts
 
   commands/
-    agents.ts
+    agent-board.ts
     bg.ts
 
   dashboard/
@@ -319,13 +319,13 @@ So:
 Use a user-scoped store root:
 
 ```text
-~/.pi/agent/agent-view/
+~/.pi/agent/agent-board/
 ```
 
 Recommended layout:
 
 ```text
-~/.pi/agent/agent-view/
+~/.pi/agent/agent-board/
   roster.json
   sessions/
     <viewId>.jsonl
@@ -366,7 +366,7 @@ Suggested shape:
   "id": "view_abc",
   "name": "flaky-test-fix",
   "cwd": "/path/to/repo",
-  "sessionFile": "/Users/.../.pi/agent/agent-view/sessions/view_abc.jsonl",
+  "sessionFile": "/Users/.../.pi/agent/agent-board/sessions/view_abc.jsonl",
   "createdAt": 1760000000000,
   "updatedAt": 1760000010000,
   "pinned": false,
@@ -374,7 +374,7 @@ Suggested shape:
   "defaultModel": null,
   "worktreeMode": "off",
   "worktreePath": null,
-  "source": "agent-view"
+  "source": "agent-board"
 }
 ```
 
@@ -446,7 +446,7 @@ This separation makes reply/resume/attach logic much cleaner.
 We will create a predictable managed session file path:
 
 ```text
-~/.pi/agent/agent-view/sessions/<viewId>.jsonl
+~/.pi/agent/agent-board/sessions/<viewId>.jsonl
 ```
 
 We do **not** need to manually synthesize the whole session file up front if Pi can create it when launched with `--session <path>`.
@@ -608,13 +608,13 @@ Recommended behavior:
 
 - from dashboard, choose attach,
 - if safe to attach, switch to target session file,
-- preserve enough metadata so `/agents` can reopen dashboard later.
+- preserve enough metadata so `/agent-board` can reopen dashboard later.
 
 ## 10.6 Why dashboard should not be its own long-lived special session in V1
 
 We do not need a dedicated dashboard transcript/session to ship MVP.
 
-Using `/agents` as a fullscreen transient UI is simpler because:
+Using `/agent-board` as a fullscreen transient UI is simpler because:
 
 - less session juggling,
 - fewer stale context problems,
@@ -676,14 +676,14 @@ Create the extension skeleton and all core types/paths.
 ### Tasks
 - Create package structure.
 - Add extension entrypoint.
-- Add constants for agent-view storage root.
+- Add constants for agent-board storage root.
 - Add JSON schemas/types for roster/meta/state/status.
 - Add safe file helpers + atomic writes.
 - Add migration/version field support.
 
 ### Exit criteria
 - Extension loads cleanly.
-- `/agents` command exists and opens a placeholder UI.
+- `/agent-board` command exists and opens a placeholder UI.
 - Store root initializes.
 
 ---
@@ -706,7 +706,7 @@ Be able to dispatch a background session and persist execution state.
 ### Exit criteria
 - Dispatch creates session file + metadata.
 - Background run survives parent Pi reload/exit.
-- Reopening `/agents` can rediscover the row and latest status.
+- Reopening `/agent-board` can rediscover the row and latest status.
 
 ---
 
@@ -764,7 +764,7 @@ Make dashboard useful alongside normal Pi sessions.
 
 ### Exit criteria
 - User can attach to a row and continue in the session.
-- User can come back to `/agents` later and see consistent state.
+- User can come back to `/agent-board` later and see consistent state.
 
 ---
 
@@ -832,7 +832,7 @@ Required manual flows:
 3. Dispatch two sessions in same repo and confirm safety rule.
 4. Peek and reply to blocked session.
 5. Attach to completed session and continue.
-6. Reload Pi and reopen `/agents`.
+6. Reload Pi and reopen `/agent-board`.
 7. Kill Pi parent while background run continues; reopen dashboard later.
 8. Delete row with/without worktree.
 
@@ -841,7 +841,7 @@ Required manual flows:
 ## 14. Key engineering decisions to lock early
 
 1. **Detached runner shim is plain `.mjs`, not TS.**
-2. **Managed sessions use predictable agent-view-owned session file paths.**
+2. **Managed sessions use predictable agent-board-owned session file paths.**
 3. **One row = one real session file.**
 4. **One run = one detached execution attempt against that session.**
 5. **Dashboard is a fullscreen custom UI, not a special transcript mode.**
@@ -885,7 +885,7 @@ Keep state derivation conservative, and expose raw preview in peek.
 Pi extension APIs differ from Claude’s built-in product surface.
 
 ### Fallback
-Use `/agents` as explicit re-entry instead of forcing full detach parity early.
+Use `/agent-board` as explicit re-entry instead of forcing full detach parity early.
 
 ---
 
@@ -894,12 +894,12 @@ Use `/agents` as explicit re-entry instead of forcing full detach parity early.
 These product questions have now been answered and are incorporated into the MVP plan.
 
 1. **Dashboard scope:** global across projects by default.
-2. **Entry point:** `/agents` is required for MVP.
+2. **Entry point:** `/agent-board` is required for MVP.
 3. **Future extensibility:** design should remain extensible for `/bg`, but `/bg` is not required in the first implementation slice.
 4. **Attach while running:** interrupt with confirmation, then attach.
 5. **Same-repo parallel writers:** require worktree isolation.
 6. **Summary strategy:** cheap model summarizer is allowed in MVP.
-7. **Return to dashboard:** `/agents` is acceptable for MVP.
+7. **Return to dashboard:** `/agent-board` is acceptable for MVP.
 
 ---
 

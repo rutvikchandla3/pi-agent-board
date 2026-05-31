@@ -1,4 +1,4 @@
-# Progress Log — Pi Agent View Extension
+# Progress Log — Pi Agent Board Extension
 
 Living checkpoint log. Newest checkpoint at top. Records what's done, workarounds, and
 nuances future agents must know. Pairs with `docs/EXPLORATION.md` (the Pi API gist).
@@ -24,7 +24,7 @@ Status legend: ☐ todo · ◐ in progress · ☑ done
 ## Checkpoint log
 
 ### CP4 — 2026-05-31 — fast non-live attach via warm PTY hosts
-- Non-live attach now uses the same Agent View PTY host path as live sessions. `ctx.switchSession`
+- Non-live attach now uses the same Agent Board PTY host path as live sessions. `ctx.switchSession`
   remains only as a no-PTY fallback, with a fullscreen switching overlay so the previously
   attached session is not visible during fallback startup.
 - Added `ensureHost()` / dashboard prewarm: selected idle/completed sessions are lazily started
@@ -32,20 +32,20 @@ Status legend: ☐ todo · ◐ in progress · ☑ done
   attach should be instant; cold attach immediately swaps to the attach surface and retries the
   socket until the host is ready.
 - Kept completed hosts warm instead of terminating them immediately. Warm pool defaults:
-  `AGENT_VIEW_MAX_WARM_HOSTS=4`, `AGENT_VIEW_WARM_HOST_TTL_MS=600000`.
+  `AGENT_BOARD_MAX_WARM_HOSTS=4`, `AGENT_BOARD_WARM_HOST_TTL_MS=600000`.
 - Fixed PTY detach flow: `ctrl+]`, `ctrl+g`, or `←` from a live attach returns to the dashboard
-  loop instead of revealing the original session where `/agents` was invoked.
+  loop instead of revealing the original session where `/agent-board` was invoked.
 - Added internal scrollback controls for PTY attach surfaces: mouse wheel, `pgup` / `pgdn`,
-  `home`, `end`. Scrolling uses an agent-view-owned absolute viewport and clamps at top/bottom
+  `home`, `end`. Scrolling uses an agent-board-owned absolute viewport and clamps at top/bottom
   so fast wheel events cannot wrap back to the bottom. Normal arrow keys still pass through.
 - Verification: `npm run typecheck` clean; `npm test` 55/55 green.
 
 ### CP3 — 2026-05-30 — standalone-ish dashboard UX
-- Added a full-screen **session view** inside `/agents`: **v** opens the selected row's
+- Added a full-screen **session view** inside `/agent-board`: **v** opens the selected row's
   live transcript from its managed session file without interrupting the worker; **← / <**
   returns to the dashboard. **→ / >** now attaches to the real Pi session, matching the
-  primary agent-view navigation expectation. **enter** also attaches. In an attached managed
-  session, **←** from an empty input reopens agent view directly using the command-capable
+  primary agent-board navigation expectation. **enter** also attaches. In an attached managed
+  session, **←** from an empty input reopens agent board directly using the command-capable
   replacement context (no slash-command text injection).
 - Added `src/core/session-view.mjs` to parse managed Pi session JSONL files and project the
   active branch into a readable transcript surface (messages, visible custom messages,
@@ -53,9 +53,9 @@ Status legend: ☐ todo · ◐ in progress · ☑ done
 - Changed the main dashboard UX to match the Claude-style screenshot more closely: the bottom
   input is always available, typing there and pressing **Enter** dispatches a new Pi session,
   and **Enter** on an empty input attaches to the selected session.
-- Added `--agent-view` via `pi.registerFlag("agent-view")`; on `session_start(reason:"startup")`
+- Added `--agent-board` via `pi.registerFlag("agent-board")`; on `session_start(reason:"startup")`
   the extension now opens the dashboard **directly** from the startup event with hidden Pi
-  header/footer chrome, so users can launch with `pi --agent-view` into a cleaner fullscreen
+  header/footer chrome, so users can launch with `pi --agent-board` into a cleaner fullscreen
   surface. Quitting that dashboard exits Pi instead of dropping into a chat session.
 
 
@@ -63,7 +63,7 @@ Status legend: ☐ todo · ◐ in progress · ☑ done
 - Built the Pi-coupled layer: `src/runtime/service.mjs` (dispatch/reply/stop/pin/rename/
   archive/reconcile + same-repo worktree safety), `src/ui/dashboard.ts` (one `ctx.ui.custom`
   component: list/peek/reply/dispatch/filter/rename/confirm/help modes, live 700ms poll, scroll),
-  `src/commands/agents.ts` (`/agents` command + action loop + attach via `ctx.switchSession`),
+  `src/commands/agent-board.ts` (`/agent-board` command + action loop + attach via `ctx.switchSession`),
   `src/index.ts` (entry: command, footer status, session_start recovery),
   root `index.ts` (re-export for auto-discovery).
 - **`npx tsc --noEmit` = 0 errors** against the real Pi `.d.ts` (path-mapped). **45/45 tests pass.**
@@ -92,7 +92,7 @@ Status legend: ☐ todo · ◐ in progress · ☑ done
 - **Workaround/nuance:**
   - Node 24 runs `.ts` directly (type-stripping) ⇒ unit tests need no build step; write
     pure-logic modules with only `node:*` imports so `node --test` can run them.
-  - **Avoid `typebox`**: MVP has no LLM-facing tool; `/agents` is a command. Store schemas are
+  - **Avoid `typebox`**: MVP has no LLM-facing tool; `/agent-board` is a command. Store schemas are
     plain TS interfaces (erasable), not typebox — keeps modules node-testable & dep-free.
   - Pi packages aren't in this repo's node_modules; they're resolved by Pi's jiti at runtime.
     For local typecheck only, `tsconfig.json` path-maps `@earendil-works/*` to the global
@@ -114,7 +114,7 @@ Status legend: ☐ todo · ◐ in progress · ☑ done
   (falling back to full text if the 1st sentence is <12 chars, e.g. "Done."). Don't re-conflate.
 - **Change per user:** cheap-model summary is now **ON by default** (`DEFAULT_SUMMARY_MODEL=
   claude-haiku-4-5` in the runner), heuristic kept as graceful fallback (no-key/offline/timeout)
-  and for state detection. Disable with `AGENT_VIEW_SUMMARY_MODEL=off`; override with a model id.
+  and for state detection. Disable with `AGENT_BOARD_SUMMARY_MODEL=off`; override with a model id.
   Tests set it `off` so the fake worker's stream doesn't get re-summarized.
 - **Invocation nuance:** `src/core/invocation.mjs` resolves how to spawn pi (node+cli.js vs
   compiled binary vs `pi` on PATH) — mirrors the subagent example. Runner runs under real `node`.

@@ -214,8 +214,8 @@ export function createService(opts) {
 	 * @param {{ keepViewId?: string|null }} [pruneOpts]
 	 */
 	function pruneWarmHosts(pruneOpts = {}) {
-		const maxWarm = envInt("AGENT_VIEW_MAX_WARM_HOSTS", 4, 0, 50);
-		const ttlMs = envInt("AGENT_VIEW_WARM_HOST_TTL_MS", 10 * 60 * 1000, 0, 24 * 60 * 60 * 1000);
+		const maxWarm = envInt("AGENT_BOARD_MAX_WARM_HOSTS", 4, 0, 50, "AGENT_VIEW_MAX_WARM_HOSTS");
+		const ttlMs = envInt("AGENT_BOARD_WARM_HOST_TTL_MS", 10 * 60 * 1000, 0, 24 * 60 * 60 * 1000, "AGENT_VIEW_WARM_HOST_TTL_MS");
 		if (maxWarm === 0 && ttlMs === 0) return;
 		const now = Date.now();
 		const idleHosts = listRows(root)
@@ -632,13 +632,13 @@ let cachedPtySupport;
 const requireForPty = createRequire(import.meta.url);
 
 function ptyHostAvailability() {
-	if (process.env.AGENT_VIEW_DISABLE_PTY === "1") return { ok: false, reason: "AGENT_VIEW_DISABLE_PTY=1" };
-	if (process.env.AGENT_VIEW_FORCE_PTY === "1") return { ok: true };
+	if (process.env.AGENT_BOARD_DISABLE_PTY === "1" || process.env.AGENT_VIEW_DISABLE_PTY === "1") return { ok: false, reason: "AGENT_BOARD_DISABLE_PTY=1" };
+	if (process.env.AGENT_BOARD_FORCE_PTY === "1" || process.env.AGENT_VIEW_FORCE_PTY === "1") return { ok: true };
 	return ptySpawnSupported();
 }
 
-function envInt(name, fallback, min, max) {
-	const raw = process.env[name];
+function envInt(name, fallback, min, max, legacyName) {
+	const raw = process.env[name] ?? (legacyName ? process.env[legacyName] : undefined);
 	if (raw === undefined || raw === "") return fallback;
 	const n = Number(raw);
 	if (!Number.isFinite(n)) return fallback;

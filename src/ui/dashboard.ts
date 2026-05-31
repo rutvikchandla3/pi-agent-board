@@ -1,5 +1,5 @@
 /**
- * The agent-view dashboard: a single full-screen `ctx.ui.custom` component that owns the
+ * The agent-board dashboard: a single full-screen `ctx.ui.custom` component that owns the
  * list, peek/reply, dispatch, filter, rename, and confirm modes plus a live poll loop.
  *
  * It resolves (`done`) only for actions the command handler must run after the surface

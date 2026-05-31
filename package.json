@@ -1,9 +1,38 @@
 {
-  "name": "pi-agent-view",
+  "name": "pi-agent-board",
   "version": "0.1.0",
-  "description": "Claude-style agent-view dashboard for Pi: dispatch, monitor, peek/reply, and attach to background Pi sessions.",
+  "description": "Agent-board dashboard for Pi: dispatch, monitor, peek/reply, and attach to background Pi sessions.",
   "type": "module",
-  "private": true,
+  "main": "./index.ts",
+  "exports": "./index.ts",
+  "files": [
+    "index.ts",
+    "src",
+    "runner",
+    "README.md",
+    "VERIFY.md",
+    "LICENSE",
+    "docs",
+    "PRD.md",
+    "IMPLEMENTATION_PLAN.md",
+    "PROGRESS.md"
+  ],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "pi-coding-agent",
+    "agent-board",
+    "background-agents",
+    "dashboard"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "pi": {
     "extensions": [
       "./src/index.ts"
@@ -11,7 +40,21 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "pack:dry": "npm pack --dry-run",
+    "verify": "npm run typecheck && npm test && npm run pack:dry"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^25.9.1",

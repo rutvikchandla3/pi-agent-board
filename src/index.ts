@@ -1,7 +1,7 @@
 /**
- * Pi Agent View — extension entry point.
+ * Pi Agent Board — extension entry point.
  *
- * Registers the `/agents` dashboard command, resolves how to
+ * Registers the `/agent-board` dashboard command, resolves how to
  * launch background workers and the detached runner, and keeps a small footer status with
  * the count of sessions needing attention. See docs/EXPLORATION.md for the design.
  */
@@ -11,21 +11,21 @@ import { resolvePiInvocation } from "./core/invocation.mjs";
 import { defaultRoot } from "./core/paths.mjs";
 import { listRows } from "./core/store.mjs";
 import { createService } from "./runtime/service.mjs";
-import { openDashboard, registerAgentsCommand } from "./commands/agents.js";
+import { openDashboard, registerAgentBoardCommand } from "./commands/agent-board.js";
 
 const RUNNER_SCRIPT = fileURLToPath(new URL("../runner/job-runner.mjs", import.meta.url));
 const PTY_RUNNER_SCRIPT = fileURLToPath(new URL("../runner/pty-runner.mjs", import.meta.url));
 
-export default function piAgentView(pi: ExtensionAPI): void {
+export default function piAgentBoard(pi: ExtensionAPI): void {
 	const root = defaultRoot();
 	const { piCommand, piArgsPrefix } = resolvePiInvocation();
 
-	const isHostedChild = process.env.AGENT_VIEW_CHILD === "1";
-	const hostedViewId = process.env.AGENT_VIEW_VIEW_ID;
+	const isHostedChild = process.env.AGENT_BOARD_CHILD === "1" || process.env.AGENT_VIEW_CHILD === "1";
+	const hostedViewId = process.env.AGENT_BOARD_VIEW_ID ?? process.env.AGENT_VIEW_VIEW_ID;
 
-	registerAgentsCommand(pi, { root, runnerScript: RUNNER_SCRIPT, ptyRunnerScript: PTY_RUNNER_SCRIPT, piCommand, piArgsPrefix });
-	pi.registerFlag("agent-view", {
-		description: "Open the agent-view dashboard on startup",
+	registerAgentBoardCommand(pi, { root, runnerScript: RUNNER_SCRIPT, ptyRunnerScript: PTY_RUNNER_SCRIPT, piCommand, piArgsPrefix });
+	pi.registerFlag("agent-board", {
+		description: "Open the agent-board dashboard on startup",
 		type: "boolean",
 		default: false,
 	});
@@ -42,13 +42,13 @@ export default function piAgentView(pi: ExtensionAPI): void {
 			const working = rows.filter((r) => r.alive).length;
 			if (isHostedChild) return;
 			if (rows.length === 0) {
-				ctx.ui.setStatus("agent-view", undefined);
+				ctx.ui.setStatus("agent-board", undefined);
 				return;
 			}
 			const parts: string[] = [];
 			if (working > 0) parts.push(ctx.ui.theme.fg("accent", `●${working}`));
 			if (needs > 0) parts.push(ctx.ui.theme.fg("warning", `◆${needs}`));
-			ctx.ui.setStatus("agent-view", parts.length ? `${ctx.ui.theme.fg("muted", "agents")} ${parts.join(" ")}` : undefined);
+			ctx.ui.setStatus("agent-board", parts.length ? `${ctx.ui.theme.fg("muted", "agents")} ${parts.join(" ")}` : undefined);
 		} catch {
 			/* never break the session over a status update */
 		}
@@ -56,16 +56,16 @@ export default function piAgentView(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (event, ctx) => {
 		updateStatus(ctx);
-		if (event.reason === "startup" && !isHostedChild && pi.getFlag("agent-view") === true && ctx.hasUI) {
+		if (event.reason === "startup" && !isHostedChild && pi.getFlag("agent-board") === true && ctx.hasUI) {
 			const service = createService({ root, runnerScript: RUNNER_SCRIPT, ptyRunnerScript: PTY_RUNNER_SCRIPT, piCommand, piArgsPrefix, defaultCwd: ctx.cwd });
 			service.reconcile();
 			ctx.ui.setWorkingVisible(false);
 			ctx.ui.setHeader(() => ({ render: () => [], invalidate() {} }));
 			ctx.ui.setFooter(() => ({ render: () => [], invalidate() {} }));
-			ctx.ui.setTitle("agent view");
+			ctx.ui.setTitle("agent board");
 			const result = await openDashboard(ctx, service);
 			if (result.action === "attach") {
-				ctx.ui.notify("Attach requires the /agents command path; launch from a normal Pi session for now.", "warning");
+				ctx.ui.notify("Attach requires the /agent-board command path; launch from a normal Pi session for now.", "warning");
 			} else {
 				ctx.shutdown();
 			}

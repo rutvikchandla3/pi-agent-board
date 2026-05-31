@@ -104,9 +104,9 @@ test("attachTarget uses any live PTY host for fast attach", () => {
 
 test("ensureHost starts an idle PTY host without changing row task state", () => {
 	const root = freshRoot();
-	const oldForce = process.env.AGENT_VIEW_FORCE_PTY;
+	const oldForce = process.env.AGENT_BOARD_FORCE_PTY;
 	try {
-		process.env.AGENT_VIEW_FORCE_PTY = "1";
+		process.env.AGENT_BOARD_FORCE_PTY = "1";
 		const meta = createView(root, { id: "v1", name: "a", cwd: "/r" });
 		writeFileSync(meta.sessionFile, JSON.stringify({ type: "session", id: "s1", cwd: "/r" }) + "\n");
 		const before = readState(root, "v1");
@@ -130,8 +130,8 @@ test("ensureHost starts an idle PTY host without changing row task state", () =>
 		assert.equal(after.processState, "exited");
 		assert.equal(after.summary, "Done");
 	} finally {
-		if (oldForce === undefined) delete process.env.AGENT_VIEW_FORCE_PTY;
-		else process.env.AGENT_VIEW_FORCE_PTY = oldForce;
+		if (oldForce === undefined) delete process.env.AGENT_BOARD_FORCE_PTY;
+		else process.env.AGENT_BOARD_FORCE_PTY = oldForce;
 		rmSync(root, { recursive: true, force: true });
 	}
 });

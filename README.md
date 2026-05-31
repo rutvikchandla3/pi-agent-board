@@ -1,19 +1,25 @@
-# Pi Agent View
+# Pi Agent Board
 
-A Claude-Code-style **agent-view dashboard for [Pi](https://github.com/earendil-works/pi-mono)**:
-one full-screen TUI to dispatch, monitor, peek/reply to, attach to, and manage multiple
-**background Pi sessions**. Each row is a real, persisted, resumable Pi session — not a
-transient subagent job.
+A Claude-Code-style **agent board** for [Pi](https://github.com/earendil-works/pi-mono): one full-screen TUI to dispatch, monitor, peek/reply to, attach to, and manage multiple **background Pi sessions**. Each row is a real, persisted, resumable Pi session — not a transient subagent job.
 
 Built on Pi's public extension/session/TUI APIs. Implements `PRD.md` / `IMPLEMENTATION_PLAN.md`.
 
-## Quick start
+## Install
+
+From npm after publish:
 
 ```bash
-npm install                 # dev-only: typescript + @types/node (runtime uses pi's own deps)
-ln -s "$(pwd)" ~/.pi/agent/extensions/agent-view    # install (auto-discovered)
-pi                          # then type /agents
-pi --agent-view             # launch straight into the dashboard UI
+pi install npm:pi-agent-board
+pi                          # then type /agent-board
+pi --agent-board             # launch straight into the dashboard UI
+```
+
+From a local checkout while developing:
+
+```bash
+npm install
+pi install "$(pwd)"          # or symlink this repo into ~/.pi/agent/extensions/agent-board
+pi
 ```
 
 > **Requires working pi provider auth.** The dashboard launches background `pi` workers; if pi
@@ -22,48 +28,41 @@ pi --agent-view             # launch straight into the dashboard UI
 
 ## What it does
 
-- **`/agents`** opens a full-screen dashboard, global across projects.
-- **`pi --agent-view`** starts directly in a cleaner dashboard-first UI (no normal Pi header/footer chrome) and quits Pi when you leave it.
+- **`/agent-board`** opens a full-screen dashboard, global across projects.
+- **`pi --agent-board`** starts directly in a cleaner dashboard-first UI (no normal Pi header/footer chrome) and quits Pi when you leave it.
 - **Dispatch** by typing in the bottom input and pressing `enter` → a new persisted Pi session + headless worker.
 - **Live rows** grouped by stage: Queued · Working · Needs input · Idle · Done · Failed · Stopped.
-- **Peek** (`space`) a row for its summary, blocker/question, and latest output; **reply** (`r`)
-  inline without attaching.
-- **Attach** (`enter` or `→` / `>`) to continue the full interactive Pi session (confirms + interrupts if it's
-  still running); `←` from an empty attached-session input returns to the dashboard (`/agents` works too).
-- **Transcript view** (`v`) opens a full-screen read-only live transcript without interrupting it;
-  **back** with (`←` / `<`).
-- **Manage:** rename (`ctrl+r`), pin (`ctrl+t`), stop (`ctrl+s`), delete selected (`ctrl+x`, archives row & keeps the session),
-  delete all inactive rows in the selected state (`X`), filter (`/`, supports `s:<state>` + free text), help (`?`).
+- **Peek** (`space`) a row for its summary, blocker/question, and latest output; **reply** (`r`) inline without attaching.
+- **Attach** (`enter` or `→` / `>`) to continue the full interactive Pi session (confirms + interrupts if it's still running); `←` from an empty attached-session input returns to the dashboard (`/agent-board` works too).
+- **Transcript view** (`v`) opens a full-screen read-only live transcript without interrupting it; **back** with (`←` / `<`).
+- **Manage:** rename (`ctrl+r`), pin (`ctrl+t`), stop (`ctrl+s`), delete selected (`ctrl+x`, archives row & keeps the session), delete all inactive rows in the selected state (`X`), filter (`/`, supports `s:<state>` + free text), help (`?`).
 - **Durable & resumable:** survives `/reload` and pi restart; reconciles runs whose monitor died.
 - **Safe parallelism:** same-repo parallel writers are auto-isolated into git worktrees.
 
-## How it works (one paragraph)
+## How it works
 
-The extension owns the dashboard + a file-backed store at `~/.pi/agent/agent-view/`. Each
-dispatch launches a **detached `runner/job-runner.mjs`** (plain Node, survives pi exiting) that
-spawns a headless worker — `pi --mode json -p --session <file> "<prompt>"` — streams its JSON
-events into `events.jsonl`, and reduces them into `status.json` + the row's `state.json`. The
-dashboard polls those files. No daemon, no `pi-subagents` internals. Full design + the exact Pi
-API contract: **`docs/EXPLORATION.md`**. Progress log + nuances: **`PROGRESS.md`**.
+The extension owns the dashboard + a file-backed store at `~/.pi/agent/agent-board/`. Each dispatch launches a **detached `runner/job-runner.mjs`** (plain Node, survives pi exiting) that spawns a headless worker — `pi --mode json -p --session <file> "<prompt>"` — streams its JSON events into `events.jsonl`, and reduces them into `status.json` + the row's `state.json`. The dashboard polls those files. No daemon, no `pi-subagents` internals. Full design + the exact Pi API contract: **`docs/EXPLORATION.md`**. Progress log + nuances: **`PROGRESS.md`**.
 
 ## Layout
 
 ```
-src/core/*.mjs     pure, node-runnable brain (store, events, derive, heuristics, rows, …)
-src/runtime/       service.mjs (dispatch/reply/stop/safety/recovery)
-src/ui/            dashboard.ts (the ctx.ui.custom component)
-src/commands/      agents.ts (the /agents command + attach)
-src/index.ts       extension entry · index.ts re-export for auto-discovery
-runner/            job-runner.mjs (detached per-run monitor)
-test/ test-support/  node --test suite + fake-pi worker stub
+src/core/*.mjs          pure, node-runnable brain (store, events, derive, heuristics, rows, …)
+src/runtime/            service.mjs (dispatch/reply/stop/safety/recovery)
+src/ui/                 dashboard.ts (the ctx.ui.custom component)
+src/commands/           agent-board.ts (the /agent-board command + attach)
+src/index.ts            extension entry · index.ts re-export for auto-discovery
+runner/                 job-runner.mjs (detached per-run monitor)
+test/ test-support/     node --test suite + fake-pi worker stub
 ```
 
 ## Develop
 
 ```bash
-npm run typecheck   # tsc --noEmit against pi's real type defs (path-mapped, no install)
-npm test            # node --test: unit + hermetic runner integration (no API key needed)
+npm run typecheck
+npm test
+npm run pack:dry
+# or all checks:
+npm run verify
 ```
 
-Config env: `AGENT_VIEW_ROOT` (store location), `AGENT_VIEW_SUMMARY_MODEL` (summary model;
-default `gpt-4o`, `off` to disable).
+Config env: `AGENT_BOARD_ROOT` (store location), `AGENT_BOARD_SUMMARY_MODEL` (summary model; default `gpt-4o`, `off` to disable). Legacy `AGENT_VIEW_*` env vars are still honored for migration.

@@ -1,4 +1,4 @@
-# Exploration & Decisions — Pi Agent View Extension
+# Exploration & Decisions — Pi Agent Board Extension
 
 **For future agents.** This is the distilled gist of the codebase recon done before
 implementing `IMPLEMENTATION_PLAN.md`. Read this first; it saves re-deriving the Pi API.
@@ -110,7 +110,7 @@ ToolCall content block: `{ type:"toolCall", id, name, arguments }`.
 
 ```
 Pi extension (parent, interactive)         runner/job-runner.mjs (detached, 1 per run)
-  /agents dashboard (ctx.ui.custom)   ─►   spawns: pi --mode json -p --session <file> <prompt>
+  /agent-board dashboard (ctx.ui.custom)   ─►   spawns: pi --mode json -p --session <file> <prompt>
   store reader/writer                       parses JSON event lines from worker stdout
   launches runner via child_process         writes runs/<runId>/{status.json,events.jsonl,
   polls store files to repaint                stdout.log,stderr.log,pid.json}
@@ -120,7 +120,7 @@ Why detached `.mjs` runner (not spawn pi directly from the extension, not a daem
 survives parent `/reload`/exit, durable status, no socket/daemon complexity. Each run is the
 durable monitor for one worker.
 
-### Store layout (user-scoped) — `~/.pi/agent/agent-view/`
+### Store layout (user-scoped) — `~/.pi/agent/agent-board/`
 ```
 roster.json                      { version, views: [viewId...] }
 views/<viewId>/meta.json         stable: id,name,cwd,sessionFile,createdAt,pinned,kind,
@@ -151,7 +151,7 @@ Needs-input heuristic: assistant text ends in `?` or contains `need your input`/
 
 Same-repo parallel **writers** require git worktree isolation (locked decision). MVP:
 explicit `worktreeMode:"worktree"` per dispatch → `git worktree add` under
-`~/.pi/agent/agent-view/worktrees/<viewId>`; persist `worktreePath`; block a 2nd active
+`~/.pi/agent/agent-board/worktrees/<viewId>`; persist `worktreePath`; block a 2nd active
 writer in the same repo if not isolated. Delete row ≠ delete data: archive row, keep
 session file; worktree removal needs explicit confirm.
 
@@ -164,14 +164,14 @@ session file; worktree removal needs explicit confirm.
 3. **Summaries: cheap model is the DEFAULT** (`DEFAULT_SUMMARY_MODEL = "gpt-4o"` in the runner;
    user choice 2026-05-30), with the **heuristic kept as a graceful fallback** (no API key /
    offline / timeout) and still used for live state detection (needs-input, semantic state).
-   Override with `AGENT_VIEW_SUMMARY_MODEL=<model>`, disable with `=off`. The summary call has a
+   Override with `AGENT_BOARD_SUMMARY_MODEL=<model>`, disable with `=off`. The summary call has a
    15s safety timeout and runs *after* the heuristic terminal state is already persisted, so a
    slow/unreachable summary model never stalls the dashboard (row flips to final state at once,
    summary upgrades a few seconds later). gpt-4o needs OpenAI auth; without it → heuristic.
 4. **Dashboard = single `ctx.ui.custom` component** owning list + peek + dispatch input as
    internal modes (plan §10.4 recommendation). Live updates via a poll loop calling
    `tui.requestRender()` (store files are the source of truth; cheap to re-read).
-5. **Attach = `ctx.switchSession(sessionFile, { withSession })`** from the `/agents` command
+5. **Attach = `ctx.switchSession(sessionFile, { withSession })`** from the `/agent-board` command
    handler. If the row's run is alive → confirm interrupt (stop run) then attach (locked decision).
 6. **Verification without a TTY/API key:** unit tests for all pure logic + an integration test
    that runs the real `.mjs` runner against a **fake `pi`** stub script emitting canned JSON

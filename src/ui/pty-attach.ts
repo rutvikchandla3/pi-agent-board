@@ -1,4 +1,4 @@
-/** Live PTY attach surface for hosted agent-view rows. */
+/** Live PTY attach surface for hosted agent-board rows. */
 import { createRequire } from "node:module";
 import { existsSync, readFileSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";

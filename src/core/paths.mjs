@@ -1,16 +1,18 @@
 /**
- * Filesystem layout for the agent-view store.
+ * Filesystem layout for the agent-board store.
  *
  * Every helper takes an explicit `root` so tests can point at a tmp dir.
- * The live default is `~/.pi/agent/agent-view/` (override with $AGENT_VIEW_ROOT).
+ * The live default is `~/.pi/agent/agent-board/` (override with $AGENT_BOARD_ROOT;
+ * legacy $AGENT_VIEW_ROOT is also honored for migration).
  */
 import * as os from "node:os";
 import * as path from "node:path";
 
-/** @returns {string} the live store root (env override or ~/.pi/agent/agent-view). */
+/** @returns {string} the live store root (env override or ~/.pi/agent/agent-board). */
 export function defaultRoot() {
+	if (process.env.AGENT_BOARD_ROOT) return path.resolve(process.env.AGENT_BOARD_ROOT);
 	if (process.env.AGENT_VIEW_ROOT) return path.resolve(process.env.AGENT_VIEW_ROOT);
-	return path.join(os.homedir(), ".pi", "agent", "agent-view");
+	return path.join(os.homedir(), ".pi", "agent", "agent-board");
 }
 
 /** @param {string} root */

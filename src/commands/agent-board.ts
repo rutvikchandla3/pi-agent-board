@@ -1,6 +1,6 @@
 /**
- * `/agents` command: opens the dashboard, runs its action loop, and attaches through
- * agent-view PTY hosts for fast switching. `ctx.switchSession` is only a no-PTY fallback.
+ * `/agent-board` command: opens the dashboard, runs its action loop, and attaches through
+ * agent-board PTY hosts for fast switching. `ctx.switchSession` is only a no-PTY fallback.
  * Also wires dispatch+attach and stale-row recovery on open.
  */
 import { existsSync } from "node:fs";
@@ -14,7 +14,7 @@ import { PtyAttachComponent, type PtyAttachResult } from "../ui/pty-attach.js";
 
 const POLL_MS = 700;
 
-export interface AgentsCommandOptions {
+export interface AgentBoardCommandOptions {
 	root: string;
 	runnerScript: string;
 	ptyRunnerScript?: string;
@@ -24,9 +24,9 @@ export interface AgentsCommandOptions {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-export function registerAgentsCommand(pi: ExtensionAPI, opts: AgentsCommandOptions): void {
-	pi.registerCommand("agents", {
-		description: "Open the background agent-view dashboard",
+export function registerAgentBoardCommand(pi: ExtensionAPI, opts: AgentBoardCommandOptions): void {
+	pi.registerCommand("agent-board", {
+		description: "Open the background agent-board dashboard",
 		handler: async (args, ctx) => {
 			const attachMatch = /(?:^|\s)--attach\s+(\S+)/.exec(args);
 			const stopFirst = /(^|\s)--stop(\s|$)/.test(args);
@@ -40,7 +40,7 @@ export function registerAgentsCommand(pi: ExtensionAPI, opts: AgentsCommandOptio
 			});
 
 			if (!ctx.hasUI) {
-				ctx.ui.notify("The agent-view dashboard requires interactive mode.", "warning");
+				ctx.ui.notify("The agent-board dashboard requires interactive mode.", "warning");
 				return;
 			}
 
@@ -63,7 +63,7 @@ export async function openDashboard(
 	ctx.ui.setWorkingVisible(false);
 	ctx.ui.setHeader(() => ({ render: () => [], invalidate() {} }));
 	ctx.ui.setFooter(() => ({ render: () => [], invalidate() {} }));
-	ctx.ui.setTitle("agent-view");
+	ctx.ui.setTitle("agent-board");
 	try {
 		return await ctx.ui.custom<DashboardResult>(
 			(tui, theme, keybindings, done) => {
@@ -163,7 +163,7 @@ async function attach(
 	const switchingOverlay = await showSwitchingOverlay(ctx, name, ensured.fallbackReason ?? ensured.error ?? "PTY unavailable");
 	const result = await ctx.switchSession(latest.meta.sessionFile, {
 		withSession: async (replaced) => {
-			replaced.ui.notify(`Attached to "${name}". Press ← on empty input to return to agent view.`, "info");
+			replaced.ui.notify(`Attached to "${name}". Press ← on empty input to return to agent board.`, "info");
 			installBackToDashboard(replaced, service);
 		},
 	}).finally(() => {
@@ -188,7 +188,7 @@ async function openPtyAttach(
 	ctx.ui.setWorkingVisible(false);
 	ctx.ui.setHeader(() => ({ render: () => [], invalidate() {} }));
 	ctx.ui.setFooter(() => ({ render: () => [], invalidate() {} }));
-	ctx.ui.setTitle(`agent-view: ${name}`);
+	ctx.ui.setTitle(`agent-board: ${name}`);
 	try {
 		return await ctx.ui.custom<PtyAttachResult>(
 			(tui, theme, keybindings, done) =>
@@ -240,7 +240,7 @@ function clipLine(text: string, width: number): string {
 }
 
 function installBackToDashboard(ctx: ExtensionCommandContext, service: ReturnType<typeof createService>): void {
-	ctx.ui.setStatus("agent-view.back", ctx.ui.theme.fg("muted", "← agents"));
+	ctx.ui.setStatus("agent-board.back", ctx.ui.theme.fg("muted", "← board"));
 	let opening = false;
 	ctx.ui.onTerminalInput((data: string) => {
 		if (opening || !matchesKey(data, Key.left)) return undefined;
@@ -265,7 +265,7 @@ function installBackToDashboard(ctx: ExtensionCommandContext, service: ReturnTyp
 					if (outcome.action === "switched") return;
 				}
 			} catch (err) {
-				ctx.ui.notify(`Couldn't open agent view: ${err instanceof Error ? err.message : String(err)}`, "error");
+				ctx.ui.notify(`Couldn't open agent board: ${err instanceof Error ? err.message : String(err)}`, "error");
 			} finally {
 				opening = false;
 			}
