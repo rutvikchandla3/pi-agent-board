@@ -537,7 +537,7 @@ Priority order:
 3. explicit blocker/question extracted from latest assistant text
 4. first sentence of latest assistant output
 5. stderr/error summary if failed
-6. fallback status text (`Queued`, `Idle`, `Done`)
+6. fallback status text (`Queued`, `Running…`, `In Progress`, `Done`)
 
 ## 9.4 Needs-input heuristics
 

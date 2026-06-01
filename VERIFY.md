@@ -75,12 +75,12 @@ Inside pi:
 2. Type a task in the bottom input (e.g. `list the files in this repo and summarize the README`), then press **Enter**.
    - A **Start session** dialog opens with **Start session** focused by default.
    - Press **Enter** again to launch immediately, or move with **↑/↓** to change **cwd**, **model**, or **thinking** first.
-   - A row appears and moves `Queued → Working → Done` (needs step 2 healthy).
+   - A row appears and moves `Queued → Running → Done` (needs step 2 healthy).
 3. **space** = peek when the input is empty (summary, blocker, latest output); in peek **r** = reply, **a** = attach.
    **→** / **>** = open a full-screen live session view without interrupting; **←** / **<** returns.
 4. **enter** on an empty input = attach to the selected full session (confirms first if it's still running).
    You're now in the real Pi session; run `/agent-board` again to return.
-5. Other keys: **/** filter (`s:working`, or free text), **Ctrl+R** rename, **Ctrl+T** pin, **Ctrl+S** stop,
+5. Other keys: **/** filter (`s:running`, or free text), **Ctrl+R** rename, **Ctrl+T** pin, **Ctrl+S** stop,
    **Ctrl+X** delete (archives the row, keeps the session file), **?** help, **Esc** clears input / quits when empty.
 
 ## 5. Inspect the durable store on disk

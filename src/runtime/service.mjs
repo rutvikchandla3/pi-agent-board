@@ -9,6 +9,7 @@ import { createRequire } from "node:module";
 import { createConnection } from "node:net";
 import { resolve } from "node:path";
 import { finalizeRun, projectViewState, reduceEvent } from "../core/events.mjs";
+import { isGenericStatusText } from "../core/derive.mjs";
 import { firstSentence, truncate } from "../core/heuristics.mjs";
 import { newRunId, newViewId, slugifyTask } from "../core/ids.mjs";
 import { launchHost as launchHostProcess, launchRun } from "../core/launch.mjs";
@@ -252,7 +253,7 @@ export function createService(opts) {
 			status.currentTool = null;
 			status.question = null;
 			status.error = null;
-			status.summary = "Working…";
+			status.summary = "Running…";
 			status.lastActivityAt = now;
 			writeForegroundState(row, status);
 			return true;
@@ -616,8 +617,7 @@ function isAgentBusy(row) {
 
 /** @param {import("../core/types.mjs").ViewState} state */
 function completionSummary(state) {
-	const generic = new Set(["", "Queued", "Working…", "Idle", "Needs input", "Completed", "Done"]);
-	if (!generic.has(state.summary?.trim?.() ?? "")) return compactSummary(state.summary);
+	if (!isGenericStatusText(state.summary)) return compactSummary(state.summary);
 	return "Done";
 }
 

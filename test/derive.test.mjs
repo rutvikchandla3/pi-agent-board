@@ -92,5 +92,7 @@ test("deriveSummary falls back to preview then status text", () => {
 
 test("fallbackStatusText", () => {
 	assert.equal(fallbackStatusText("queued"), "Queued");
+	assert.equal(fallbackStatusText("working"), "Running…");
 	assert.equal(fallbackStatusText("needs_input"), "Needs input");
+	assert.equal(fallbackStatusText("idle"), "In Progress");
 });

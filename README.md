@@ -33,7 +33,7 @@ pi
 ```
 
 > **Requires working pi provider auth.** The dashboard launches background `pi` workers; if pi
-> can't reach a model provider, rows will sit in `Working`. Confirm with
+> can't reach a model provider, rows will sit in `Running`. Confirm with
 > `pi --mode json -p --no-session "say hi"` (must end in an `agent_end` event). See **VERIFY.md**.
 
 ## What it does
@@ -41,7 +41,7 @@ pi
 - **`/agent-board`** opens a full-screen dashboard, global across projects.
 - **`pi --agent-board`** starts directly in a cleaner dashboard-first UI (no normal Pi header/footer chrome) and quits Pi when you leave it.
 - **Dispatch** by typing in the bottom input and pressing `enter` → a **Start session** dialog opens with default focus on **Start session**; press `enter` again to launch, or change **cwd**, **model** (from scoped models / available models), and **thinking** first.
-- **Live rows** grouped by stage: Queued · Working · Needs input · Idle · Done · Failed · Stopped.
+- **Live rows** grouped by stage: Queued · Running · Needs input · In Progress · Done · Failed · Stopped.
 - **Peek** (`space`) a row for its summary, blocker/question, and latest output; **reply** (`r`) inline without attaching.
 - **Attach** (`enter` or `→` / `>`) to continue the full interactive Pi session (confirms + interrupts if it's still running); `←` from an empty attached-session input returns to the dashboard (`/agent-board` works too).
 - **Transcript view** (`v`) opens a full-screen read-only live transcript without interrupting it; **back** with (`←` / `<`).

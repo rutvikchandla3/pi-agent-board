@@ -129,9 +129,9 @@ Each row should show at minimum:
 V1 groups:
 
 - Queued
-- Working
+- Running
 - Needs input
-- Idle
+- In Progress
 - Done
 
 Stretch:

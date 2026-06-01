@@ -9,6 +9,7 @@
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import type { Component, EditorTheme, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { isGenericStatusText, normalizeGenericStatusText } from "../core/derive.mjs";
 import { firstSentence, truncate } from "../core/heuristics.mjs";
 import {
 	canonicalModelRef,
@@ -745,7 +746,7 @@ export class DashboardComponent implements Component {
 			currentRunId: null,
 			semanticState: "idle",
 			processState: "exited",
-			summary: "Idle",
+			summary: "In Progress",
 			lastActivityAt: Date.now(),
 			updatedAt: Date.now(),
 			needsInput: false,
@@ -1078,7 +1079,7 @@ export class DashboardComponent implements Component {
 		out.push(t.fg("dim", `  ${row.meta.repoCwd}${row.meta.worktreeMode === "worktree" ? "  (worktree)" : ""}`));
 		out.push("");
 		out.push(t.fg("muted", "Summary"));
-		out.push(clip(`  ${row.state?.summary ?? "—"}`, width));
+		out.push(clip(`  ${normalizeGenericStatusText(st, row.state?.summary)}`, width));
 		if (row.state?.question) {
 			out.push("");
 			out.push(t.fg("warning", "Question / blocker"));
@@ -1419,7 +1420,7 @@ function headerStageSummary(theme: ThemeLike, counts: HeaderCounts, filterQuery:
 	const joiner = theme.fg("dim", " · ");
 	const parts = [
 		headerStagePart(theme, "needs_input", counts.needs, compact ? "awaiting" : "awaiting input"),
-		headerStagePart(theme, "working", counts.working, "working"),
+		headerStagePart(theme, "working", counts.working, "running"),
 		headerStagePart(theme, "completed", counts.completed, "done"),
 	];
 	if (filterQuery) parts.push(theme.fg("warning", `filter:${filterQuery}`));
@@ -1544,8 +1545,7 @@ function isAgentBusy(row: Row): boolean {
 }
 
 function completedSummary(summary: string, _latestAssistantPreview: string): string {
-	const generic = new Set(["", "Queued", "Working…", "Idle", "Needs input", "Completed", "Done"]);
-	if (!generic.has(summary.trim())) return compactCompletedSummary(summary);
+	if (!isGenericStatusText(summary)) return compactCompletedSummary(summary);
 	return "Done";
 }
 

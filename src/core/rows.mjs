@@ -3,7 +3,8 @@
  * semantic state, and filter them. No pi-tui / theme coupling (the dashboard component
  * applies colors); everything here is unit-tested.
  */
-import { baseName, relativeTime, truncate } from "./heuristics.mjs";
+import { normalizeGenericStatusText } from "./derive.mjs";
+import { baseName, relativeTime } from "./heuristics.mjs";
 import { GROUP_LABELS, GROUP_ORDER, SEMANTIC_STATES } from "./types.mjs";
 
 /** @typedef {import("./store.mjs").Row} Row */
@@ -92,7 +93,7 @@ export function stateColor(state) {
  */
 export function rowView(row, now) {
 	const state = rowState(row);
-	const summary = oneLine(row.state?.summary?.trim() || "—");
+	const summary = oneLine(normalizeGenericStatusText(state, row.state?.summary));
 	const lastActivityAt = row.state?.lastActivityAt ?? row.meta.updatedAt ?? row.meta.createdAt;
 	const worktree = row.meta.worktreeMode === "worktree";
 	const place = baseName(row.meta.repoCwd || row.meta.cwd) + (worktree ? "⌥" : "");
@@ -145,22 +146,34 @@ export function groupRows(rows, now) {
  * @returns {{ states: SemanticState[], terms: string[] }}
  */
 export function parseFilter(query) {
-	/** @type {SemanticState[]} */
-	const states = [];
+	/** @type {Set<SemanticState>} */
+	const states = new Set();
 	/** @type {string[]} */
 	const terms = [];
 	for (const tok of String(query || "").trim().split(/\s+/).filter(Boolean)) {
 		const m = /^s:(.+)$/i.exec(tok);
 		if (m) {
-			const want = m[1].toLowerCase();
+			const want = normalizeStateToken(m[1]);
 			for (const s of SEMANTIC_STATES) {
-				if (s === want || s.startsWith(want)) states.push(s);
+				const aliases = [s, GROUP_LABELS[s]];
+				if (aliases.some((alias) => matchesStateToken(alias, want))) states.add(s);
 			}
 		} else {
 			terms.push(tok.toLowerCase());
 		}
 	}
-	return { states, terms };
+	return { states: [...states], terms };
+}
+
+/** @param {string} value */
+function normalizeStateToken(value) {
+	return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+/** @param {string} alias @param {string} want */
+function matchesStateToken(alias, want) {
+	const normalized = normalizeStateToken(alias);
+	return normalized === want || normalized.startsWith(want);
 }
 
 /** @param {string} query @returns {boolean} whether the text is a filter expression. */

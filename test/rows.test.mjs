@@ -50,6 +50,11 @@ test("rowView exposes folder place for dashboard rows", () => {
 	assert.equal(rowView(row("b", "working", { repoCwd: "/Users/me/project-b", worktreeMode: "worktree" }), 0).place, "project-b⌥");
 });
 
+test("rowView normalizes generic status labels to current display names", () => {
+	assert.equal(rowView(row("a", "working", { summary: "Working…" }), 0).summary, "Running…");
+	assert.equal(rowView(row("b", "idle", { summary: "Idle" }), 0).summary, "In Progress");
+});
+
 test("parseFilter splits state + terms", () => {
 	const f = parseFilter("s:working auth bug");
 	assert.deepEqual(f.states, ["working"]);
@@ -59,6 +64,11 @@ test("parseFilter splits state + terms", () => {
 test("parseFilter prefix matches multiple states", () => {
 	const f = parseFilter("s:need");
 	assert.deepEqual(f.states, ["needs_input"]);
+});
+
+test("parseFilter accepts display-label aliases", () => {
+	assert.deepEqual(parseFilter("s:run").states, ["working"]);
+	assert.deepEqual(parseFilter("s:in-progress").states, ["idle"]);
 });
 
 test("filterRows by state", () => {

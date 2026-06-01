@@ -13,6 +13,18 @@ import { firstSentence, truncate } from "./heuristics.mjs";
 /** @typedef {import("./types.mjs").RunStatus} RunStatus */
 /** @typedef {import("./types.mjs").SemanticState} SemanticState */
 
+const GENERIC_STATUS_TEXT = {
+	queued: new Set(["Queued"]),
+	working: new Set(["Working", "Working…", "Running", "Running…"]),
+	needs_input: new Set(["Needs input"]),
+	idle: new Set(["Idle", "In Progress"]),
+	completed: new Set(["Completed", "Done"]),
+	failed: new Set(["Failed"]),
+	stopped: new Set(["Stopped"]),
+};
+
+const ALL_GENERIC_STATUS_TEXT = new Set(Object.values(GENERIC_STATUS_TEXT).flatMap((labels) => [...labels]));
+
 /**
  * Compute the terminal semantic state for a finished run.
  * @param {{ exitCode:number|null, stopReason:string|null, stoppedByUser:boolean, needsInput:boolean }} p
@@ -36,11 +48,11 @@ export function fallbackStatusText(state) {
 		case "queued":
 			return "Queued";
 		case "working":
-			return "Working…";
+			return "Running…";
 		case "needs_input":
 			return "Needs input";
 		case "idle":
-			return "Idle";
+			return "In Progress";
 		case "completed":
 			return "Done";
 		case "failed":
@@ -50,6 +62,23 @@ export function fallbackStatusText(state) {
 		default:
 			return "Unknown";
 	}
+}
+
+/** @param {string|null|undefined} text */
+export function isGenericStatusText(text) {
+	const trimmed = String(text || "").trim();
+	return !trimmed || ALL_GENERIC_STATUS_TEXT.has(trimmed);
+}
+
+/**
+ * Normalize generic fallback summaries to the current display label for a state.
+ * @param {SemanticState} state
+ * @param {string|null|undefined} text
+ */
+export function normalizeGenericStatusText(state, text) {
+	const trimmed = String(text || "").trim();
+	if (!trimmed || GENERIC_STATUS_TEXT[state]?.has(trimmed)) return fallbackStatusText(state);
+	return trimmed;
 }
 
 /**
