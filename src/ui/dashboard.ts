@@ -6,6 +6,7 @@
  * closes — attaching to a session (tears down the current session) or quitting. Everything
  * else (dispatch, reply, stop, pin, rename, archive) is handled in-place against the store.
  */
+import { readFileSync } from "node:fs";
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import type { Component, EditorTheme, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -1345,7 +1346,16 @@ function renderCenteredBox(lines: string[], width: number, height: number, theme
 	return out;
 }
 
-const AGENTBOARD_VERSION = "v0.1.0";
+const AGENTBOARD_VERSION = readAgentBoardVersion();
+function readAgentBoardVersion(): string {
+	try {
+		const raw = readFileSync(new URL("../../package.json", import.meta.url), "utf8");
+		const pkg = JSON.parse(raw) as { version?: string };
+		return pkg.version ? `v${pkg.version}` : "dev";
+	} catch {
+		return "dev";
+	}
+}
 // ANSI rendering of /Users/rutvik/Downloads/pi-logo-on-dark.svg.
 // The SVG is a 4x4 grid mark: P-shaped left form plus a separate lower-right stem.
 const PI_ICON = [
