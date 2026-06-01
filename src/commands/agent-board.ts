@@ -20,6 +20,7 @@ export interface AgentBoardCommandOptions {
 	ptyRunnerScript?: string;
 	piCommand: string;
 	piArgsPrefix: string[];
+	getThinkingLevel: () => "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -46,24 +47,33 @@ export function registerAgentBoardCommand(pi: ExtensionAPI, opts: AgentBoardComm
 
 			if (attachMatch) {
 				const outcome = await attach(ctx, service, opts.root, attachMatch[1], stopFirst);
-				if (outcome.action !== "switched") await dashboardAttachLoop(ctx, service, opts.root, attachMatch[1]);
+				if (outcome.action !== "switched") await dashboardAttachLoop(ctx, service, opts.root, attachMatch[1], opts.getThinkingLevel);
 				return;
 			}
 
-			await dashboardAttachLoop(ctx, service, opts.root, null);
+			await dashboardAttachLoop(ctx, service, opts.root, null, opts.getThinkingLevel);
 		},
 	});
 }
 
 export async function openDashboard(
-	ctx: Pick<ExtensionCommandContext, "ui" | "cwd">,
+	ctx: Pick<ExtensionCommandContext, "ui" | "cwd" | "modelRegistry" | "model">,
 	service: ReturnType<typeof createService>,
-	options: { initialSelectedId?: string | null } = {},
+	options: {
+		initialSelectedId?: string | null;
+		currentThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	} = {},
 ): Promise<DashboardResult> {
 	ctx.ui.setWorkingVisible(false);
 	ctx.ui.setHeader(() => ({ render: () => [], invalidate() {} }));
 	ctx.ui.setFooter(() => ({ render: () => [], invalidate() {} }));
 	ctx.ui.setTitle("agent-board");
+	let availableModels: any[] = [];
+	try {
+		availableModels = ctx.modelRegistry.getAvailable();
+	} catch {
+		availableModels = [];
+	}
 	try {
 		return await ctx.ui.custom<DashboardResult>(
 			(tui, theme, keybindings, done) => {
@@ -77,6 +87,9 @@ export async function openDashboard(
 					service,
 					defaultCwd: ctx.cwd,
 					initialSelectedId: options.initialSelectedId,
+					availableModels,
+					currentModel: ctx.model ?? null,
+					currentThinkingLevel: options.currentThinkingLevel ?? "off",
 				});
 				interval = setInterval(() => {
 					comp.refresh();
@@ -108,12 +121,16 @@ async function dashboardAttachLoop(
 	service: ReturnType<typeof createService>,
 	root: string,
 	initialSelectedId: string | null,
+	getThinkingLevel?: () => "off" | "minimal" | "low" | "medium" | "high" | "xhigh",
 ): Promise<void> {
 	let selectedId = initialSelectedId;
 	let again = true;
 	while (again) {
 		service.reconcile();
-		const result = await openDashboard(ctx, service, { initialSelectedId: selectedId });
+		const result = await openDashboard(ctx, service, {
+			initialSelectedId: selectedId,
+			currentThinkingLevel: getThinkingLevel?.(),
+		});
 		if (result.action !== "attach") return;
 		selectedId = result.viewId;
 		const outcome = await attach(ctx, service, root, result.viewId, result.stopFirst);

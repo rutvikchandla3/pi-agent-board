@@ -73,6 +73,8 @@ Inside pi:
    - With `pi --agent-board`, quitting the dashboard exits Pi instead of dropping you into a normal chat session.
    - The startup path should feel cleaner than `/agent-board`: no normal Pi header/footer chrome and no dispatch notifications above the dashboard.
 2. Type a task in the bottom input (e.g. `list the files in this repo and summarize the README`), then press **Enter**.
+   - A **Start session** dialog opens with **Start session** focused by default.
+   - Press **Enter** again to launch immediately, or move with **↑/↓** to change **cwd**, **model**, or **thinking** first.
    - A row appears and moves `Queued → Working → Done` (needs step 2 healthy).
 3. **space** = peek when the input is empty (summary, blocker, latest output); in peek **r** = reply, **a** = attach.
    **→** / **>** = open a full-screen live session view without interrupting; **←** / **<** returns.

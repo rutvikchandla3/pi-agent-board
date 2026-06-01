@@ -69,6 +69,22 @@ test("archive deletes an active or stuck queued row after confirmation", () => {
 	}
 });
 
+test("launch prefs round-trip through service", () => {
+	const root = freshRoot();
+	try {
+		const svc = service(root);
+		svc.saveLaunchPrefs({ cwd: "/tmp/work", model: "openai/gpt-5.4", thinkingLevel: "high" });
+		assert.deepEqual(svc.getLaunchPrefs(), {
+			version: 1,
+			cwd: "/tmp/work",
+			model: "openai/gpt-5.4",
+			thinkingLevel: "high",
+		});
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("attachTarget uses any live PTY host for fast attach", () => {
 	const root = freshRoot();
 	try {
@@ -98,6 +114,38 @@ test("attachTarget uses any live PTY host for fast attach", () => {
 			sessionFile: meta.sessionFile,
 		});
 	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("dispatch carries cwd, model, and thinking into the hosted session config", () => {
+	const root = freshRoot();
+	const oldForce = process.env.AGENT_BOARD_FORCE_PTY;
+	try {
+		process.env.AGENT_BOARD_FORCE_PTY = "1";
+		let launched = null;
+		const svc = service(root, {
+			launchHost: (_root, config) => {
+				launched = config;
+				return { pid: process.pid, configPath: "/no/host-config.json" };
+			},
+		});
+		const res = svc.dispatch("ship it", {
+			cwd: "/tmp/project-a",
+			model: "anthropic/claude-sonnet-4-8",
+			thinkingLevel: "high",
+		});
+		assert.equal(res.ok, true);
+		assert.equal(launched.cwd, "/tmp/project-a");
+		assert.equal(launched.model, "anthropic/claude-sonnet-4-8");
+		assert.equal(launched.thinkingLevel, "high");
+		const row = svc.row(res.viewId);
+		assert.equal(row.meta.cwd, "/tmp/project-a");
+		assert.equal(row.meta.defaultModel, "anthropic/claude-sonnet-4-8");
+		assert.equal(row.meta.defaultThinking, "high");
+	} finally {
+		if (oldForce === undefined) delete process.env.AGENT_BOARD_FORCE_PTY;
+		else process.env.AGENT_BOARD_FORCE_PTY = oldForce;
 		rmSync(root, { recursive: true, force: true });
 	}
 });

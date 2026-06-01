@@ -59,6 +59,7 @@ export const GROUP_LABELS = {
  * @property {boolean} pinned
  * @property {"pi-session"} kind
  * @property {string|null} defaultModel
+ * @property {"off"|"minimal"|"low"|"medium"|"high"|"xhigh"|null} defaultThinking
  * @property {WorktreeMode} worktreeMode
  * @property {string|null} worktreePath
  * @property {boolean} writeCapable      Whether this session may mutate files (default true).
@@ -147,6 +148,7 @@ export const GROUP_LABELS = {
  * @property {string} piCommand        Executable to launch the worker (e.g. "pi" or a node path).
  * @property {string[]} piArgsPrefix   Args before our flags (e.g. [cliJsPath] when piCommand is node).
  * @property {string|null} model
+ * @property {"off"|"minimal"|"low"|"medium"|"high"|"xhigh"|null} thinkingLevel
  * @property {string|null} tools
  */
 
@@ -161,6 +163,7 @@ export const GROUP_LABELS = {
  * @property {string} piCommand
  * @property {string[]} piArgsPrefix
  * @property {string|null} model
+ * @property {"off"|"minimal"|"low"|"medium"|"high"|"xhigh"|null} thinkingLevel
  * @property {string|null} tools
  * @property {Record<string,string>} env
  * @property {number} cols
@@ -168,5 +171,14 @@ export const GROUP_LABELS = {
  */
 
 /** Roster index (`roster.json`). @typedef {Object} Roster @property {number} version @property {string[]} views */
+
+/**
+ * Persisted launch dialog defaults (`launch-prefs.json`).
+ * @typedef {Object} LaunchPrefs
+ * @property {number} version
+ * @property {string|null} cwd
+ * @property {string|null} model
+ * @property {"off"|"minimal"|"low"|"medium"|"high"|"xhigh"|null} thinkingLevel
+ */
 
 export {};

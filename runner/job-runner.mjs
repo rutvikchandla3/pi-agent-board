@@ -39,7 +39,7 @@ function main() {
 	writeStatus(root, status);
 	writeState(root, projectViewState(status, Date.now()));
 
-	// Build worker args: pi --mode json -p --session <file> [--model m] [--tools t] <prompt>
+	// Build worker args: pi --mode json -p --session <file> [--model m] [--thinking l] [--tools t] <prompt>
 	const args = [
 		...config.piArgsPrefix,
 		"--mode",
@@ -49,6 +49,7 @@ function main() {
 		config.sessionFile,
 	];
 	if (config.model) args.push("--model", config.model);
+	if (config.thinkingLevel) args.push("--thinking", config.thinkingLevel);
 	if (config.tools) args.push("--tools", config.tools);
 	args.push(config.prompt);
 

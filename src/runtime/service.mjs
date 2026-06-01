@@ -19,10 +19,12 @@ import {
 	createView,
 	listRows,
 	loadRow,
+	readLaunchPrefs,
 	readPid,
 	readState,
 	readStatus,
 	writeHostPid,
+	writeLaunchPrefs,
 	writeMeta,
 	writeState,
 } from "../core/store.mjs";
@@ -69,6 +71,7 @@ export function createService(opts) {
 			piCommand: opts.piCommand,
 			piArgsPrefix: opts.piArgsPrefix,
 			model: meta.defaultModel ?? null,
+			thinkingLevel: meta.defaultThinking ?? null,
 			tools: null,
 		};
 		const { pid } = launch(root, config, { runnerScript: opts.runnerScript });
@@ -93,6 +96,7 @@ export function createService(opts) {
 			piCommand: opts.piCommand,
 			piArgsPrefix: opts.piArgsPrefix,
 			model: meta.defaultModel ?? null,
+			thinkingLevel: meta.defaultThinking ?? null,
 			tools: null,
 			env: {},
 			cols: Number(process.env.COLUMNS || 120),
@@ -276,7 +280,13 @@ export function createService(opts) {
 		 * Enforces worktree isolation for same-repo parallel writers (locked decision):
 		 * if another non-isolated writer is already active in this repo, we require a worktree.
 		 * @param {string} text
-		 * @param {{ cwd?: string, worktree?: boolean, writeCapable?: boolean }} [dispatchOpts]
+		 * @param {{
+		 *   cwd?: string,
+		 *   worktree?: boolean,
+		 *   writeCapable?: boolean,
+		 *   model?: string|null,
+		 *   thinkingLevel?: "off"|"minimal"|"low"|"medium"|"high"|"xhigh"|null,
+		 * }} [dispatchOpts]
 		 * @returns {{ ok: boolean, viewId?: string, error?: string, usedWorktree?: boolean, hostMode?: "pty"|"json-runner", fallbackReason?: string }}
 		 */
 		dispatch(text, dispatchOpts = {}) {
@@ -285,6 +295,8 @@ export function createService(opts) {
 
 			const cwd = dispatchOpts.cwd ?? opts.defaultCwd;
 			const writeCapable = dispatchOpts.writeCapable ?? true;
+			const defaultModel = dispatchOpts.model ?? null;
+			const defaultThinking = dispatchOpts.thinkingLevel ?? null;
 			const repoRoot = gitRepoRoot(cwd);
 
 			let worktree = Boolean(dispatchOpts.worktree);
@@ -321,6 +333,8 @@ export function createService(opts) {
 				repoRoot,
 				worktreeMode,
 				worktreePath: worktreePathValue,
+				defaultModel,
+				defaultThinking,
 				writeCapable,
 			});
 			const pty = ptyHostAvailability();
@@ -413,6 +427,15 @@ export function createService(opts) {
 				return { kind: "pty", socketPath: row.host.socketPath, sessionFile: row.meta.sessionFile };
 			}
 			return { kind: "session", sessionFile: row.meta.sessionFile };
+		},
+
+		getLaunchPrefs() {
+			return readLaunchPrefs(root);
+		},
+
+		saveLaunchPrefs(prefs) {
+			writeLaunchPrefs(root, prefs ?? {});
+			return { ok: true };
 		},
 
 		/** @param {string} viewId @param {boolean} pinned */

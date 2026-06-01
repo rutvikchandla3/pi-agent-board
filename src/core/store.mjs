@@ -13,6 +13,7 @@ import { isAlive } from "./pid.mjs";
 /** @typedef {import("./types.mjs").ViewState} ViewState */
 /** @typedef {import("./types.mjs").RunStatus} RunStatus */
 /** @typedef {import("./types.mjs").HostStatus} HostStatus */
+/** @typedef {import("./types.mjs").LaunchPrefs} LaunchPrefs */
 
 const META_VERSION = 1;
 
@@ -45,6 +46,21 @@ export function removeFromRoster(root, viewId) {
 		roster.version = roster.version ?? 1;
 		writeRoster(root, { version: roster.version, views: next });
 	}
+}
+
+/** @param {string} root @returns {LaunchPrefs} */
+export function readLaunchPrefs(root) {
+	return readJson(P.launchPrefsPath(root), { version: 1, cwd: null, model: null, thinkingLevel: null });
+}
+
+/** @param {string} root @param {Partial<LaunchPrefs>} prefs */
+export function writeLaunchPrefs(root, prefs) {
+	atomicWriteJson(P.launchPrefsPath(root), {
+		version: 1,
+		cwd: prefs.cwd ?? null,
+		model: prefs.model ?? null,
+		thinkingLevel: prefs.thinkingLevel ?? null,
+	});
 }
 
 // ---- meta / state / status ------------------------------------------------
@@ -198,7 +214,9 @@ export function listRows(root, opts = {}) {
  * @param {{
  *   id: string, name: string, cwd: string, repoCwd?: string, repoRoot?: string|null,
  *   worktreeMode?: import("./types.mjs").WorktreeMode, worktreePath?: string|null,
- *   defaultModel?: string|null, writeCapable?: boolean,
+ *   defaultModel?: string|null,
+ *   defaultThinking?: "off"|"minimal"|"low"|"medium"|"high"|"xhigh"|null,
+ *   writeCapable?: boolean,
  * }} opts
  * @returns {ViewMeta}
  */
@@ -219,6 +237,7 @@ export function createView(root, opts) {
 		pinned: false,
 		kind: "pi-session",
 		defaultModel: opts.defaultModel ?? null,
+		defaultThinking: opts.defaultThinking ?? null,
 		worktreeMode: opts.worktreeMode ?? "off",
 		worktreePath: opts.worktreePath ?? null,
 		writeCapable: opts.writeCapable ?? true,

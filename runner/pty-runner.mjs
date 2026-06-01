@@ -79,6 +79,7 @@ function main() {
 
 	const args = [...config.piArgsPrefix, "--session", config.sessionFile];
 	if (config.model) args.push("--model", config.model);
+	if (config.thinkingLevel) args.push("--thinking", config.thinkingLevel);
 	if (config.tools) args.push("--tools", config.tools);
 	if (config.initialPrompt) args.push(config.initialPrompt);
 

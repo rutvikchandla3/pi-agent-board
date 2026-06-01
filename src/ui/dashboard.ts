@@ -10,6 +10,14 @@ import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import type { Component, EditorTheme, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { firstSentence, truncate } from "../core/heuristics.mjs";
+import {
+	canonicalModelRef,
+	clampThinkingLevel,
+	listDirectorySuggestions,
+	resolveDirectoryValue,
+	resolveLaunchContext,
+	supportedThinkingLevels,
+} from "../core/launch-options.mjs";
 import { filterRows, groupRows, rowState, stateGlyph } from "../core/rows.mjs";
 import { loadSessionView } from "../core/session-view.mjs";
 import { GROUP_LABELS } from "../core/types.mjs";
@@ -28,7 +36,18 @@ interface ThemeLike {
 
 export type DashboardResult = { action: "exit" } | { action: "attach"; viewId: string; stopFirst: boolean };
 
-type Mode = "list" | "dispatch" | "filter" | "peek" | "reply" | "rename" | "confirm" | "help" | "session";
+type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+type LaunchModel = {
+	provider: string;
+	id: string;
+	name?: string;
+	reasoning?: boolean;
+	thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>>;
+};
+type LaunchChoice = { model: LaunchModel; thinkingLevel?: ThinkingLevel };
+type LaunchPicker = "cwd" | "model" | "thinking" | null;
+
+type Mode = "list" | "dispatch" | "filter" | "peek" | "reply" | "rename" | "confirm" | "help" | "session" | "launch";
 
 interface PendingConfirm {
 	prompt: string;
@@ -44,9 +63,30 @@ interface InputNotice {
 	expiresAt: number;
 }
 
+interface LaunchState {
+	fieldIndex: number;
+	picker: LaunchPicker;
+	cwd: string;
+	cwdQuery: string;
+	cwdSuggestions: string[];
+	cwdSuggestionIndex: number;
+	choices: LaunchChoice[];
+	scopeSource: "scoped" | "all";
+	model: LaunchModel | null;
+	modelQuery: string;
+	modelFiltered: LaunchChoice[];
+	modelIndex: number;
+	thinking: ThinkingLevel;
+	thinkingOptions: ThinkingLevel[];
+	thinkingIndex: number;
+}
+
 export interface DashboardDeps {
 	service: Service;
 	defaultCwd: string;
+	availableModels: LaunchModel[];
+	currentModel: LaunchModel | null;
+	currentThinkingLevel: ThinkingLevel;
 	initialSelectedId?: string | null;
 }
 
@@ -65,6 +105,8 @@ export class DashboardComponent implements Component {
 	private prewarmedId: string | null = null;
 	private flash: { text: string; level: FlashLevel } | null = null;
 	private inputNotice: InputNotice | null = null;
+	private launch: LaunchState | null = null;
+	private lastLaunchPrefs: { cwd: string | null; model: string | null; thinkingLevel: ThinkingLevel | null } | null = null;
 	private readonly editor: CustomEditor;
 
 	constructor(
@@ -84,6 +126,11 @@ export class DashboardComponent implements Component {
 		};
 		this.editor.onSubmit = (text) => this.submitEditor(text);
 		this.selectedId = deps.initialSelectedId ?? null;
+		try {
+			this.lastLaunchPrefs = this.deps.service.getLaunchPrefs?.() ?? null;
+		} catch {
+			this.lastLaunchPrefs = null;
+		}
 		this.refresh();
 		this.prewarmSelected();
 	}
@@ -149,7 +196,7 @@ export class DashboardComponent implements Component {
 				this.handleListKey(data);
 				break;
 			case "dispatch":
-				this.handleTextMode(data, () => this.submitDispatch(), () => this.leaveDispatchMode(), { tabToggle: true });
+				this.handleTextMode(data, () => this.openLaunchDialog(), () => this.leaveDispatchMode(), { tabToggle: true });
 				break;
 			case "filter":
 				this.handleTextMode(data, () => this.toListMode(), () => this.clearFilter(), { live: true });
@@ -165,6 +212,9 @@ export class DashboardComponent implements Component {
 				break;
 			case "session":
 				this.handleSessionKey(data);
+				break;
+			case "launch":
+				this.handleLaunchKey(data);
 				break;
 			case "confirm":
 				this.handleConfirmKey(data);
@@ -190,7 +240,7 @@ export class DashboardComponent implements Component {
 		if (matchesKey(data, Key.right) || data === ">") return this.attachSelected();
 		if (data === "v") return this.openSessionView();
 		if (matchesKey(data, Key.enter)) {
-			if (this.input.trim()) return this.submitDispatch();
+			if (this.input.trim()) return this.openLaunchDialog();
 			return this.attachSelected();
 		}
 		if (matchesKey(data, Key.tab)) {
@@ -286,6 +336,226 @@ export class DashboardComponent implements Component {
 		this.mode = "list";
 	}
 
+	private handleLaunchKey(data: string): void {
+		const launch = this.launch;
+		if (!launch) {
+			this.mode = "list";
+			return;
+		}
+		if (launch.picker) {
+			this.handleLaunchPickerKey(data, launch);
+			return;
+		}
+		if (matchesKey(data, Key.up)) {
+			launch.fieldIndex = launch.fieldIndex === 0 ? 3 : launch.fieldIndex - 1;
+			return;
+		}
+		if (matchesKey(data, Key.down)) {
+			launch.fieldIndex = launch.fieldIndex === 3 ? 0 : launch.fieldIndex + 1;
+			return;
+		}
+		if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+			this.closeLaunchDialog();
+			return;
+		}
+		if (matchesKey(data, Key.enter)) {
+			this.activateLaunchField();
+			return;
+		}
+		if (launch.fieldIndex === 1 || launch.fieldIndex === 2) {
+			const seeded = this.applyLaunchQueryInput("", data);
+			if (seeded !== null) {
+				this.openLaunchPicker(launch.fieldIndex === 1 ? "cwd" : "model", seeded);
+			}
+		}
+	}
+
+	private handleLaunchPickerKey(data: string, launch: LaunchState): void {
+		if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+			launch.picker = null;
+			return;
+		}
+		if (matchesKey(data, Key.up)) {
+			if (launch.picker === "cwd") launch.cwdSuggestionIndex = Math.max(0, launch.cwdSuggestionIndex - 1);
+			else if (launch.picker === "model") launch.modelIndex = Math.max(0, launch.modelIndex - 1);
+			else launch.thinkingIndex = Math.max(0, launch.thinkingIndex - 1);
+			return;
+		}
+		if (matchesKey(data, Key.down)) {
+			if (launch.picker === "cwd") launch.cwdSuggestionIndex = Math.min(Math.max(0, launch.cwdSuggestions.length - 1), launch.cwdSuggestionIndex + 1);
+			else if (launch.picker === "model") launch.modelIndex = Math.min(Math.max(0, launch.modelFiltered.length - 1), launch.modelIndex + 1);
+			else launch.thinkingIndex = Math.min(Math.max(0, launch.thinkingOptions.length - 1), launch.thinkingIndex + 1);
+			return;
+		}
+		if (matchesKey(data, Key.enter)) {
+			if (launch.picker === "cwd") {
+				const selected = launch.cwdSuggestions[launch.cwdSuggestionIndex] ?? resolveDirectoryValue(launch.cwdQuery, launch.cwd);
+				if (!selected) {
+					this.notice("Select an existing folder", "warn");
+					return;
+				}
+				this.selectLaunchCwd(selected);
+				if (this.launch) this.launch.picker = null;
+				return;
+			}
+			if (launch.picker === "model") {
+				const selected = launch.modelFiltered[launch.modelIndex];
+				if (!selected) {
+					this.notice("Select a model", "warn");
+					return;
+				}
+				this.selectLaunchModel(selected);
+				launch.picker = null;
+				return;
+			}
+			const selectedThinking = launch.thinkingOptions[launch.thinkingIndex];
+			if (selectedThinking) launch.thinking = selectedThinking;
+			launch.picker = null;
+			return;
+		}
+		if (launch.picker === "cwd") {
+			const next = this.applyLaunchQueryInput(launch.cwdQuery, data);
+			if (next !== null) {
+				launch.cwdQuery = next;
+				launch.cwdSuggestions = listDirectorySuggestions(next, launch.cwd);
+				launch.cwdSuggestionIndex = 0;
+			}
+			return;
+		}
+		if (launch.picker === "model") {
+			const next = this.applyLaunchQueryInput(launch.modelQuery, data);
+			if (next !== null) {
+				launch.modelQuery = next;
+				launch.modelFiltered = filterLaunchChoices(launch.choices, next);
+				launch.modelIndex = 0;
+			}
+		}
+	}
+
+	private applyLaunchQueryInput(current: string, data: string): string | null {
+		if (matchesKey(data, Key.backspace)) return current.slice(0, -1);
+		if (isBracketedPaste(data)) return `${current}${stripBracketedPaste(data)}`;
+		if (isPrintable(data)) return `${current}${data}`;
+		return null;
+	}
+
+	private activateLaunchField(): void {
+		if (!this.launch) return;
+		if (this.launch.fieldIndex === 0) {
+			this.confirmLaunch();
+			return;
+		}
+		if (this.launch.fieldIndex === 1) return this.openLaunchPicker("cwd");
+		if (this.launch.fieldIndex === 2) return this.openLaunchPicker("model", "");
+		if (this.launch.thinkingOptions.length <= 1) return;
+		this.openLaunchPicker("thinking");
+	}
+
+	private openLaunchDialog(): void {
+		const prompt = this.input.trim();
+		if (!prompt) return this.toListMode();
+		const defaults = this.launchDefaults();
+		this.launch = this.buildLaunchState(defaults.cwd, defaults.model, defaults.thinking);
+		this.mode = "launch";
+		this.inputNotice = null;
+	}
+
+	private launchDefaults(): { cwd: string; model: LaunchModel | null; thinking: ThinkingLevel } {
+		const saved = this.lastLaunchPrefs;
+		const cwd = resolveDirectoryValue(saved?.cwd ?? "", this.deps.defaultCwd) ?? this.deps.defaultCwd;
+		const model = saved?.model ? findLaunchModelByRef(this.deps.availableModels, saved.model) ?? this.deps.currentModel : this.deps.currentModel;
+		const thinking = saved?.thinkingLevel ?? this.deps.currentThinkingLevel;
+		return { cwd, model, thinking };
+	}
+
+	private closeLaunchDialog(): void {
+		this.launch = null;
+		this.mode = "list";
+	}
+
+	private confirmLaunch(): void {
+		if (!this.launch) return;
+		this.submitDispatch({
+			cwd: this.launch.cwd,
+			model: this.launch.model ? canonicalModelRef(this.launch.model) : null,
+			thinkingLevel: this.launch.thinking,
+		});
+	}
+
+	private buildLaunchState(cwd: string, preferredModel: LaunchModel | null, preferredThinking: ThinkingLevel): LaunchState {
+		const context = resolveLaunchContext(cwd, this.deps.availableModels, preferredModel, preferredThinking) as {
+			choices: LaunchChoice[];
+			selectedModel: LaunchModel | null;
+			thinking: ThinkingLevel;
+			thinkingOptions: ThinkingLevel[];
+			scopeSource: "scoped" | "all";
+		};
+		const initialBrowserCwd = homeLaunchRoot(cwd);
+		const modelFiltered = filterLaunchChoices(context.choices, "");
+		const modelIndex = Math.max(0, modelFiltered.findIndex((choice) => sameLaunchModel(choice.model, context.selectedModel)));
+		const thinkingOptions = supportedThinkingLevels(context.selectedModel) as ThinkingLevel[];
+		const thinking = clampThinkingLevel(context.selectedModel, context.thinking, context.thinking);
+		const thinkingIndex = Math.max(0, thinkingOptions.indexOf(thinking));
+		return {
+			fieldIndex: 0,
+			picker: null,
+			cwd,
+			cwdQuery: initialBrowserCwd,
+			cwdSuggestions: listDirectorySuggestions(initialBrowserCwd, cwd),
+			cwdSuggestionIndex: 0,
+			choices: context.choices,
+			scopeSource: context.scopeSource,
+			model: context.selectedModel,
+			modelQuery: "",
+			modelFiltered,
+			modelIndex,
+			thinking,
+			thinkingOptions,
+			thinkingIndex,
+		};
+	}
+
+	private openLaunchPicker(picker: Exclude<LaunchPicker, null>, seed?: string): void {
+		const launch = this.launch;
+		if (!launch) return;
+		launch.picker = picker;
+		if (picker === "cwd") {
+			launch.cwdQuery = seed ?? launch.cwdQuery ?? homeLaunchRoot(launch.cwd);
+			launch.cwdSuggestions = listDirectorySuggestions(launch.cwdQuery, launch.cwd);
+			launch.cwdSuggestionIndex = 0;
+			return;
+		}
+		if (picker === "model") {
+			launch.modelQuery = seed ?? "";
+			launch.modelFiltered = filterLaunchChoices(launch.choices, launch.modelQuery);
+			const selected = launch.modelFiltered.findIndex((choice) => sameLaunchModel(choice.model, launch.model));
+			launch.modelIndex = selected >= 0 ? selected : 0;
+			return;
+		}
+		launch.thinkingOptions = supportedThinkingLevels(launch.model) as ThinkingLevel[];
+		launch.thinkingIndex = Math.max(0, launch.thinkingOptions.indexOf(launch.thinking));
+	}
+
+	private selectLaunchCwd(cwd: string): void {
+		if (!this.launch) return;
+		const next = this.buildLaunchState(cwd, this.launch.model, this.launch.thinking);
+		next.fieldIndex = 1;
+		next.cwdQuery = cwd;
+		next.cwdSuggestions = listDirectorySuggestions(cwd, cwd);
+		this.launch = next;
+	}
+
+	private selectLaunchModel(choice: LaunchChoice): void {
+		if (!this.launch) return;
+		this.launch.model = choice.model;
+		this.launch.modelQuery = "";
+		this.launch.modelFiltered = filterLaunchChoices(this.launch.choices, "");
+		this.launch.modelIndex = Math.max(0, this.launch.modelFiltered.findIndex((entry) => sameLaunchModel(entry.model, choice.model)));
+		this.launch.thinkingOptions = supportedThinkingLevels(choice.model) as ThinkingLevel[];
+		this.launch.thinking = clampThinkingLevel(choice.model, choice.thinkingLevel ?? this.launch.thinking, this.launch.thinking);
+		this.launch.thinkingIndex = Math.max(0, this.launch.thinkingOptions.indexOf(this.launch.thinking));
+	}
+
 	/** Shared text-editing for input modes. */
 	private handleTextMode(
 		data: string,
@@ -335,7 +605,7 @@ export class DashboardComponent implements Component {
 				return this.submitReply();
 			case "list":
 			case "dispatch":
-				return this.input.trim() ? this.submitDispatch() : this.attachSelected();
+				return this.input.trim() ? this.openLaunchDialog() : this.attachSelected();
 		}
 	}
 
@@ -360,12 +630,26 @@ export class DashboardComponent implements Component {
 		this.notifyInputState("Filter cleared — NORMAL mode", "muted");
 	}
 
-	private submitDispatch(): void {
+	private submitDispatch(launchOpts?: { cwd?: string; model?: string | null; thinkingLevel?: ThinkingLevel | null }): void {
 		const text = this.input.trim();
 		if (!text) return this.toListMode();
-		const res = this.deps.service.dispatch(text, { cwd: this.deps.defaultCwd, worktree: this.worktreeNext });
+		const launchCwd = launchOpts?.cwd ?? this.deps.defaultCwd;
+		const launchModel = launchOpts?.model ?? (this.launch?.model ? canonicalModelRef(this.launch.model) : null);
+		const launchThinking = launchOpts?.thinkingLevel ?? this.launch?.thinking ?? this.deps.currentThinkingLevel;
+		const res = this.deps.service.dispatch(text, {
+			cwd: launchCwd,
+			worktree: this.worktreeNext,
+			model: launchModel,
+			thinkingLevel: launchThinking,
+		});
 		if (!res.ok) this.notice(res.error ?? "Dispatch failed", "error");
 		else {
+			this.lastLaunchPrefs = { cwd: launchCwd, model: launchModel, thinkingLevel: launchThinking };
+			try {
+				this.deps.service.saveLaunchPrefs?.(this.lastLaunchPrefs);
+			} catch {
+				/* best effort */
+			}
 			this.selectedId = res.viewId ?? this.selectedId;
 			if (res.hostMode === "json-runner") {
 				this.notice(`Dispatched with non-live fallback${res.usedWorktree ? " (worktree)" : ""}: ${res.fallbackReason ?? "PTY unavailable"}`, "warn");
@@ -375,6 +659,7 @@ export class DashboardComponent implements Component {
 		}
 		this.setInput("");
 		this.worktreeNext = false;
+		this.launch = null;
 		this.mode = "list";
 		this.inputNotice = null;
 		this.refresh();
@@ -598,6 +883,7 @@ export class DashboardComponent implements Component {
 		if (this.mode === "help") return this.fitToHeight(lines.concat(this.renderHelp(width)), width);
 		if (this.mode === "peek" || this.mode === "reply") return this.fitToHeight(lines.concat(this.renderPeek(width)), width);
 		if (this.mode === "session") return this.fitToHeight(lines.concat(this.renderSession(width)), width);
+		if (this.mode === "launch") return this.fitToHeight(lines.concat(this.renderLaunch(width)), width);
 
 		// Body: grouped rows with a scroll viewport.
 		const footer = this.renderFooter(width);
@@ -661,11 +947,11 @@ export class DashboardComponent implements Component {
 		const selected = this.selectedRow();
 		const live = selected ? selected.hostAlive && isAgentBusy(selected) : false;
 		if (this.mode === "dispatch") {
-			const hints = ["esc normal", "enter dispatch", "shift+enter newline", "←/→ edit", "ctrl/alt+←/→ word"];
+			const hints = ["esc normal", "enter launch", "shift+enter newline", "←/→ edit", "ctrl/alt+←/→ word"];
 			if (this.input.trim() || this.worktreeNext) hints.splice(2, 0, `tab worktree:${this.worktreeNext ? "on" : "off"}`);
 			return this.hintLine("INSERT", "success", hints);
 		}
-		const primary = this.input.trim() ? "enter dispatch" : live ? "enter attach live" : "enter resume";
+		const primary = this.input.trim() ? "enter launch" : live ? "enter attach live" : "enter resume";
 		const hints = ["i insert", primary, "→ attach", "d done", "space peek", "v transcript", "ctrl+r rename", "ctrl+x delete", "X delete state", "/ filter", "? help"];
 		if (this.input.trim()) hints.splice(1, 0, "esc clear");
 		if (this.input.trim() || this.worktreeNext) hints.splice(this.input.trim() ? 3 : 2, 0, `tab worktree:${this.worktreeNext ? "on" : "off"}`);
@@ -875,13 +1161,82 @@ export class DashboardComponent implements Component {
 		}
 	}
 
+	private renderLaunch(width: number): string[] {
+		const t = this.theme;
+		const launch = this.launch;
+		if (!launch) return [t.fg("muted", "  Launch dialog unavailable.")];
+		const boxWidth = clamp(Math.min(width - 4, 88), 48, Math.max(48, width - 2));
+		const inner = Math.max(20, boxWidth - 4);
+		const lines: string[] = [];
+		lines.push(t.fg("accent", t.bold("Start session")));
+		lines.push("");
+		for (const line of wrap(`Prompt: ${this.input.trim()}`, inner, 3)) lines.push(line);
+		lines.push("");
+		lines.push(this.renderLaunchField(inner, 1, `cwd      ${displayPath(launch.cwd)}`, launch.picker === null && launch.fieldIndex === 1));
+		lines.push(this.renderLaunchField(inner, 2, `model    ${launch.model ? formatLaunchModel(launch.model) : "default"}`, launch.picker === null && launch.fieldIndex === 2));
+		lines.push(this.renderLaunchField(inner, 3, `thinking ${launch.thinking}`, launch.picker === null && launch.fieldIndex === 3));
+		if (this.worktreeNext) lines.push(t.fg("warning", "worktree enabled for this launch"));
+		lines.push("");
+		if (launch.picker === "cwd") {
+			lines.push(t.fg("warning", `cwd› ${singleLineInput(launch.cwdQuery)}${cursor()}`));
+			lines.push(...this.renderLaunchSuggestions(inner, launch.cwdSuggestions, launch.cwdSuggestionIndex, (value) => displayPath(value)));
+			lines.push("");
+			lines.push(t.fg("dim", "type to filter folders · enter choose · esc back"));
+		} else if (launch.picker === "model") {
+			lines.push(t.fg("warning", `model› ${singleLineInput(launch.modelQuery)}${cursor()}`));
+			lines.push(...this.renderLaunchSuggestions(inner, launch.modelFiltered, launch.modelIndex, (choice) => `${formatLaunchModel(choice.model)}${choice.thinkingLevel ? ` · ${choice.thinkingLevel}` : ""}`));
+			lines.push("");
+			lines.push(t.fg("dim", `showing ${launch.scopeSource === "scoped" ? "scoped" : "available"} models · type to filter · enter choose · esc back`));
+		} else if (launch.picker === "thinking") {
+			lines.push(t.fg("warning", "thinking"));
+			lines.push(...this.renderLaunchSuggestions(inner, launch.thinkingOptions, launch.thinkingIndex, (value) => value));
+			lines.push("");
+			lines.push(t.fg("dim", "↑↓ choose · enter select · esc back"));
+		} else {
+			lines.push(t.fg("dim", "↑↓ move · enter open/select · esc cancel"));
+		}
+		lines.push("");
+		lines.push(this.renderLaunchButton(inner, launch.picker === null && launch.fieldIndex === 0));
+		return renderCenteredBox(lines, width, this.tui.terminal?.rows ?? 24, t);
+	}
+
+	private renderLaunchField(width: number, index: number, text: string, selected: boolean): string {
+		const prefix = selected ? this.theme.fg("accent", "› ") : this.theme.fg("dim", "  ");
+		const label = clip(text, Math.max(1, width - 2));
+		return padTo(`${prefix}${selected ? this.theme.fg("accent", label) : label}`, width);
+	}
+
+	private renderLaunchButton(width: number, selected: boolean): string {
+		const label = " Start session ";
+		const button = selected
+			? `${ansiBg(56, 189, 248)}${ansiFg(15, 23, 42, this.theme.bold(label))}\x1b[49m\x1b[39m`
+			: `${ansiBg(30, 41, 59)}${ansiFg(226, 232, 240, label)}\x1b[49m\x1b[39m`;
+		const pad = Math.max(0, width - visibleWidth(label));
+		return `${" ".repeat(pad)}${button}`;
+	}
+
+	private renderLaunchSuggestions<T>(width: number, items: T[], index: number, renderItem: (item: T) => string): string[] {
+		if (items.length === 0) return [this.theme.fg("muted", "  no matches")];
+		const start = Math.max(0, Math.min(index - 2, Math.max(0, items.length - 6)));
+		const end = Math.min(items.length, start + 6);
+		const out: string[] = [];
+		for (let i = start; i < end; i++) {
+			const selected = i === index;
+			const prefix = selected ? this.theme.fg("accent", "→ ") : this.theme.fg("dim", "  ");
+			const body = clip(renderItem(items[i]), Math.max(1, width - 2));
+			out.push(`${prefix}${selected ? this.theme.fg("accent", body) : body}`);
+		}
+		if (items.length > end) out.push(this.theme.fg("dim", `  ↓ ${items.length - end} more`));
+		return out;
+	}
+
 	private renderHelp(width: number): string[] {
 		const t = this.theme;
 		const rows: Array<[string, string]> = [
 			["normal", "Dashboard owns keys; i enters insert mode"],
 			["insert", "Editor owns text keys; / is literal, arrows move cursor"],
 			["i", "Enter insert/compose mode; then / is literal for slash commands"],
-			["enter", "Normal: attach/resume or dispatch draft; Insert: dispatch/send"],
+			["enter", "Normal/insert with draft: open start-session dialog; empty: attach/resume"],
 			["shift+enter", "Insert a newline while in insert/reply"],
 			["esc", "Insert → normal; Normal with draft clears; empty quits standalone dashboard"],
 			["↑/↓", "Normal: move selection; Insert: move cursor"],
@@ -942,6 +1297,53 @@ export class DashboardComponent implements Component {
 
 // ---- helpers --------------------------------------------------------------
 
+function sameLaunchModel(a: LaunchModel | null | undefined, b: LaunchModel | null | undefined): boolean {
+	return Boolean(a && b && a.provider === b.provider && a.id === b.id);
+}
+
+function formatLaunchModel(model: LaunchModel): string {
+	return `${model.provider}/${model.id}`;
+}
+
+function filterLaunchChoices(choices: LaunchChoice[], query: string): LaunchChoice[] {
+	const q = query.trim().toLowerCase();
+	if (!q) return choices;
+	return choices.filter((choice) => {
+		const hay = `${choice.model.provider} ${choice.model.id} ${choice.model.name ?? ""} ${choice.model.provider}/${choice.model.id}`.toLowerCase();
+		return hay.includes(q);
+	});
+}
+
+function findLaunchModelByRef(models: LaunchModel[], ref: string): LaunchModel | null {
+	const target = String(ref || "").trim().toLowerCase();
+	if (!target) return null;
+	return models.find((model) => `${model.provider}/${model.id}`.toLowerCase() === target) ?? null;
+}
+
+function stripBracketedPaste(data: string): string {
+	return data.replace(/\x1b\[200~|\x1b\[201~/g, "");
+}
+
+function homeLaunchRoot(fallback: string): string {
+	return process.env.HOME || process.env.USERPROFILE ? "~" : fallback;
+}
+
+function renderCenteredBox(lines: string[], width: number, height: number, theme: ThemeLike): string[] {
+	const innerWidth = Math.max(20, Math.min(width - 6, Math.max(...lines.map((line) => visibleWidth(line)), 20)));
+	const boxWidth = Math.min(width, innerWidth + 4);
+	const left = Math.max(0, Math.floor((width - boxWidth) / 2));
+	const box = [
+		`${theme.fg("borderMuted", "┌")}${theme.fg("borderMuted", "─".repeat(Math.max(0, boxWidth - 2)))}${theme.fg("borderMuted", "┐")}`,
+		...lines.map((line) => `${theme.fg("borderMuted", "│")} ${padTo(clip(line, boxWidth - 4), boxWidth - 4)} ${theme.fg("borderMuted", "│")}`),
+		`${theme.fg("borderMuted", "└")}${theme.fg("borderMuted", "─".repeat(Math.max(0, boxWidth - 2)))}${theme.fg("borderMuted", "┘")}`,
+	];
+	const top = Math.max(0, Math.floor((height - box.length) / 2) - 1);
+	const out: string[] = [];
+	for (let i = 0; i < top; i++) out.push("");
+	for (const line of box) out.push(`${" ".repeat(left)}${line}`);
+	return out;
+}
+
 const AGENTBOARD_VERSION = "v0.1.0";
 // ANSI rendering of /Users/rutvik/Downloads/pi-logo-on-dark.svg.
 // The SVG is a 4x4 grid mark: P-shaped left form plus a separate lower-right stem.
@@ -998,6 +1400,7 @@ function headerTextRows(theme: ThemeLike, row: Row | null, counts: HeaderCounts,
 		const state = rowState(row);
 		contextPrefix = `${stageFg(state, stateGlyph(state, row.alive, row.hostAlive))} ${ansiFg(226, 232, 240, row.meta.name)}`;
 		if (row.meta.defaultModel) contextBits.push(row.meta.defaultModel);
+		if (row.meta.defaultThinking) contextBits.push(`thinking:${row.meta.defaultThinking}`);
 		contextBits.push(GROUP_LABELS[state]);
 		if (row.alive) contextBits.push("live");
 		if (row.hostAlive) contextBits.push("hosted");

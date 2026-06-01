@@ -23,7 +23,14 @@ export default function piAgentBoard(pi: ExtensionAPI): void {
 	const isHostedChild = process.env.AGENT_BOARD_CHILD === "1" || process.env.AGENT_VIEW_CHILD === "1";
 	const hostedViewId = process.env.AGENT_BOARD_VIEW_ID ?? process.env.AGENT_VIEW_VIEW_ID;
 
-	registerAgentBoardCommand(pi, { root, runnerScript: RUNNER_SCRIPT, ptyRunnerScript: PTY_RUNNER_SCRIPT, piCommand, piArgsPrefix });
+	registerAgentBoardCommand(pi, {
+		root,
+		runnerScript: RUNNER_SCRIPT,
+		ptyRunnerScript: PTY_RUNNER_SCRIPT,
+		piCommand,
+		piArgsPrefix,
+		getThinkingLevel: () => pi.getThinkingLevel(),
+	});
 	pi.registerFlag("agent-board", {
 		description: "Open the agent-board dashboard on startup",
 		type: "boolean",
@@ -63,7 +70,7 @@ export default function piAgentBoard(pi: ExtensionAPI): void {
 			ctx.ui.setHeader(() => ({ render: () => [], invalidate() {} }));
 			ctx.ui.setFooter(() => ({ render: () => [], invalidate() {} }));
 			ctx.ui.setTitle("agent board");
-			const result = await openDashboard(ctx, service);
+			const result = await openDashboard(ctx, service, { currentThinkingLevel: pi.getThinkingLevel() });
 			if (result.action === "attach") {
 				ctx.ui.notify("Attach requires the /agent-board command path; launch from a normal Pi session for now.", "warning");
 			} else {
