@@ -28,6 +28,13 @@ const MOUSE_DISABLE = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
 const MOUSE_WHEEL_LINES = 5;
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const LOADING_TICK_MS = 120;
+const OSC52_PREFIX = "\x1b]52;";
+const OSC52_MAX_BYTES = 1_000_000;
+const OSC52_CARRY_MAX_BYTES = OSC52_MAX_BYTES + 4096;
+const TERMINAL_PASSTHROUGH_MAX_BYTES = 5_000_000;
+const TERMINAL_PASSTHROUGH_CARRY_MAX_BYTES = TERMINAL_PASSTHROUGH_MAX_BYTES + 4096;
+const KITTY_IMAGE_PREFIX = "\x1b_G";
+const ITERM2_FILE_PREFIX = "\x1b]1337;File=";
 
 interface XtermLike {
 	write(data: string, cb?: () => void): void;
@@ -38,6 +45,12 @@ interface XtermLike {
 			length: number;
 			getLine(index: number): BufferLineLike | undefined;
 			getNullCell(): BufferCellLike;
+		};
+	};
+	_core?: {
+		_oscLinkService?: {
+			getLinkData?: (id: number) => { uri?: string } | undefined;
+			_dataByLinkId?: Map<number, { data?: { uri?: string } }>;
 		};
 	};
 }
@@ -51,6 +64,7 @@ interface BufferLineLike {
 interface BufferCellLike {
 	getWidth(): number;
 	getChars(): string;
+	extended?: { urlId?: number; _urlId?: number };
 	getFgColor(): number;
 	getBgColor(): number;
 	isFgRGB(): boolean;
@@ -82,6 +96,8 @@ export class PtyAttachComponent implements Component {
 	private liveRedrawTimer: ReturnType<typeof setTimeout> | null = null;
 	private forcedRedrawAfterLiveOutput = false;
 	private mouseRefreshTimers: Array<ReturnType<typeof setTimeout>> = [];
+	private osc52Carry = "";
+	private passthroughCarry = "";
 	private readonly connectStartedAt = Date.now();
 	private readonly term: XtermLike;
 	private cols = 120;
@@ -108,6 +124,10 @@ export class PtyAttachComponent implements Component {
 		this.cols = size.cols;
 		this.rows = size.rows;
 		this.term = new Terminal({ cols: this.cols, rows: this.rows, scrollback: 2000, allowProposedApi: true });
+		// Default to terminal-native mouse behavior so selection, copy, and link clicks
+		// work in Ghostty/tmux/etc. Opt back into attach-pane mouse scroll with
+		// AGENT_BOARD_ATTACH_MOUSE=1 (or legacy AGENT_BOARD_ENABLE_MOUSE_SCROLL=1).
+		this.disableMouseScroll();
 		this.enableMouseScroll();
 		this.refreshMouseScrollMode();
 		this.replayScreenLog();
@@ -172,7 +192,7 @@ export class PtyAttachComponent implements Component {
 		const header =
 			this.theme.fg("accent", this.theme.bold(` ${this.opts.title} `)) +
 			this.theme.fg("muted", `${this.status} · ← detach · ctrl+] detach`);
-		return [clip(header, width), ...body.map((l) => clip(l, width)), this.theme.fg("dim", "─".repeat(width))];
+		return [clip(header, width), ...body.map((l) => clipTerminalLine(l, width)), this.theme.fg("dim", "─".repeat(width))];
 	}
 
 	/** Centered "loading" surface shown until the first PTY output paints the session. */
@@ -308,13 +328,19 @@ export class PtyAttachComponent implements Component {
 	}
 
 	private enableMouseScroll(): void {
+		if (!this.mouseScrollEnabled()) return;
 		try {
 			this.tui.terminal.write(MOUSE_ENABLE);
 		} catch {}
 	}
 
+	private mouseScrollEnabled(): boolean {
+		return process.env.AGENT_BOARD_ATTACH_MOUSE === "1" || process.env.AGENT_BOARD_ENABLE_MOUSE_SCROLL === "1";
+	}
+
 	private refreshMouseScrollMode(): void {
 		this.clearMouseRefreshTimers();
+		if (!this.mouseScrollEnabled()) return;
 		for (const delay of [0, 50, 250]) {
 			const timer = setTimeout(() => {
 				if (!this.closed) this.enableMouseScroll();
@@ -438,7 +464,7 @@ export class PtyAttachComponent implements Component {
 			try {
 				const msg = JSON.parse(line);
 				if (msg.type === "output" && typeof msg.data === "string") {
-					this.pushOutput(msg.data);
+					this.pushOutput(msg.data, { forwardProtocols: true });
 					this.forceChildRedrawAfterLiveOutput();
 				} else if (msg.type === "hello" || msg.type === "status") this.status = "attached";
 				else if (msg.type === "exit") {
@@ -463,6 +489,25 @@ export class PtyAttachComponent implements Component {
 		this.liveRedrawTimer.unref?.();
 	}
 
+	private forwardTerminalProtocols(data: string): void {
+		const toWrite: string[] = [];
+		if (process.env.AGENT_BOARD_FORWARD_OSC52 !== "0") {
+			const { sequences, carry } = extractOsc52Sequences(this.osc52Carry + data);
+			this.osc52Carry = carry;
+			toWrite.push(...sequences);
+		}
+		if (process.env.AGENT_BOARD_FORWARD_IMAGES !== "0") {
+			const { sequences, carry } = extractTerminalPassthroughSequences(this.passthroughCarry + data);
+			this.passthroughCarry = carry;
+			toWrite.push(...sequences);
+		}
+		for (const seq of toWrite) {
+			try {
+				this.tui.terminal.write(seq);
+			} catch {}
+		}
+	}
+
 	private replayScreenLog(): void {
 		if (!this.opts.screenLogPath || !existsSync(this.opts.screenLogPath)) return;
 		try {
@@ -471,8 +516,9 @@ export class PtyAttachComponent implements Component {
 		} catch {}
 	}
 
-	private pushOutput(data: string): void {
+	private pushOutput(data: string, opts: { forwardProtocols?: boolean } = {}): void {
 		if (data.length === 0) return;
+		if (opts.forwardProtocols) this.forwardTerminalProtocols(data);
 		// @xterm/headless parses asynchronously; the buffer is only populated once this
 		// callback fires. Flip out of the loading state here (not synchronously) so a warm
 		// (replayed) attach never paints the banner over a not-yet-parsed buffer.
@@ -493,7 +539,7 @@ export class PtyAttachComponent implements Component {
 		const end = Math.min(buf.length, start + height);
 		const reusable = buf.getNullCell();
 		for (let i = start; i < end; i++) {
-			out.push(clip(lineToAnsi(buf.getLine(i), reusable), width));
+			out.push(clipTerminalLine(lineToAnsi(buf.getLine(i), reusable, this.term), width));
 		}
 		if (out.length === 0) out.push("Waiting for PTY output…");
 		return out.slice(-height);
@@ -521,7 +567,7 @@ function localResizeJiggleSize(cols: number, rows: number): { cols: number; rows
 	return null;
 }
 
-function lineToAnsi(line: BufferLineLike | undefined, reusable: BufferCellLike): string {
+function lineToAnsi(line: BufferLineLike | undefined, reusable: BufferCellLike, term: XtermLike): string {
 	if (!line) return "";
 	let last = -1;
 	for (let x = 0; x < line.length; x++) {
@@ -532,17 +578,25 @@ function lineToAnsi(line: BufferLineLike | undefined, reusable: BufferCellLike):
 	if (last < 0) return "";
 
 	let out = "";
-	let prev = "";
+	let prevAttr = "";
+	let prevUri = "";
 	for (let x = 0; x <= last; x++) {
 		const cell = line.getCell(x, reusable);
 		if (!cell || cell.getWidth() === 0) continue;
+		const uri = osc8UriForCell(term, cell);
+		if (uri !== prevUri) {
+			if (prevUri) out += closeOsc8();
+			if (uri) out += openOsc8(uri);
+			prevUri = uri;
+		}
 		const key = attrKey(cell);
-		if (key !== prev) {
+		if (key !== prevAttr) {
 			out += attrsToAnsi(cell);
-			prev = key;
+			prevAttr = key;
 		}
 		out += cell.getChars() || " ";
 	}
+	if (prevUri) out += closeOsc8();
 	return out + "\x1b[0m";
 }
 
@@ -598,6 +652,128 @@ function colorCodes(cell: BufferCellLike, kind: "fg" | "bg"): string[] {
 
 function clip(line: string, width: number): string {
 	return truncateToWidth(line, width, "");
+}
+
+function clipTerminalLine(line: string, width: number): string {
+	// pi-tui's width helpers are ANSI-aware, but OSC sequences are terminal
+	// protocols rather than SGR styling. Avoid truncating inside OSC 8 hyperlinks;
+	// these lines are already projected from an xterm buffer sized to the viewport.
+	return line.includes("\x1b]") ? line : clip(line, width);
+}
+
+function osc8UriForCell(term: XtermLike, cell: BufferCellLike): string {
+	const id = cell.extended?.urlId ?? cell.extended?._urlId ?? 0;
+	if (!id) return "";
+	const service = term._core?._oscLinkService;
+	const uri = service?.getLinkData?.(id)?.uri ?? service?._dataByLinkId?.get(id)?.data?.uri;
+	return sanitizeOscPayload(uri ?? "");
+}
+
+function openOsc8(uri: string): string {
+	return uri ? `\x1b]8;;${uri}\x07` : "";
+}
+
+function closeOsc8(): string {
+	return "\x1b]8;;\x07";
+}
+
+function extractOsc52Sequences(input: string): { sequences: string[]; carry: string } {
+	const sequences: string[] = [];
+	let scanFrom = 0;
+	let carryStart = -1;
+	while (scanFrom < input.length) {
+		const start = input.indexOf(OSC52_PREFIX, scanFrom);
+		if (start < 0) break;
+		const bel = input.indexOf("\x07", start + OSC52_PREFIX.length);
+		const st = input.indexOf("\x1b\\", start + OSC52_PREFIX.length);
+		const end = firstTerminator(bel, st);
+		if (!end) {
+			carryStart = start;
+			break;
+		}
+		const [endIndex, terminatorLength] = end;
+		const seq = input.slice(start, endIndex + terminatorLength);
+		if (isForwardableOsc52(seq)) sequences.push(seq);
+		scanFrom = endIndex + terminatorLength;
+	}
+	const carry = carryStart >= 0 ? input.slice(carryStart).slice(-OSC52_CARRY_MAX_BYTES) : osc52PrefixSuffix(input);
+	return { sequences, carry };
+}
+
+function osc52PrefixSuffix(input: string): string {
+	const max = Math.min(input.length, OSC52_PREFIX.length - 1);
+	for (let len = max; len > 0; len--) {
+		const suffix = input.slice(-len);
+		if (OSC52_PREFIX.startsWith(suffix)) return suffix;
+	}
+	return "";
+}
+
+function firstTerminator(bel: number, st: number): [number, number] | null {
+	if (bel < 0 && st < 0) return null;
+	if (bel >= 0 && (st < 0 || bel < st)) return [bel, 1];
+	return [st, 2];
+}
+
+function extractTerminalPassthroughSequences(input: string): { sequences: string[]; carry: string } {
+	const sequences: string[] = [];
+	let scanFrom = 0;
+	let carryStart = -1;
+	while (scanFrom < input.length) {
+		const kitty = input.indexOf(KITTY_IMAGE_PREFIX, scanFrom);
+		const iterm = input.indexOf(ITERM2_FILE_PREFIX, scanFrom);
+		const start = firstIndex(kitty, iterm);
+		if (start < 0) break;
+		const prefix = start === kitty ? KITTY_IMAGE_PREFIX : ITERM2_FILE_PREFIX;
+		const bel = prefix === ITERM2_FILE_PREFIX ? input.indexOf("\x07", start + prefix.length) : -1;
+		const st = input.indexOf("\x1b\\", start + prefix.length);
+		const end = firstTerminator(bel, st);
+		if (!end) {
+			carryStart = start;
+			break;
+		}
+		const [endIndex, terminatorLength] = end;
+		const seq = input.slice(start, endIndex + terminatorLength);
+		if (seq.length <= TERMINAL_PASSTHROUGH_MAX_BYTES) sequences.push(seq);
+		scanFrom = endIndex + terminatorLength;
+	}
+	const carry = carryStart >= 0 ? input.slice(carryStart).slice(-TERMINAL_PASSTHROUGH_CARRY_MAX_BYTES) : terminalPassthroughPrefixSuffix(input);
+	return { sequences, carry };
+}
+
+function firstIndex(a: number, b: number): number {
+	if (a < 0) return b;
+	if (b < 0) return a;
+	return Math.min(a, b);
+}
+
+function terminalPassthroughPrefixSuffix(input: string): string {
+	let best = "";
+	for (const prefix of [KITTY_IMAGE_PREFIX, ITERM2_FILE_PREFIX]) {
+		const max = Math.min(input.length, prefix.length - 1);
+		for (let len = max; len > best.length; len--) {
+			const suffix = input.slice(-len);
+			if (prefix.startsWith(suffix)) best = suffix;
+		}
+	}
+	return best;
+}
+
+function isForwardableOsc52(seq: string): boolean {
+	if (seq.length > OSC52_MAX_BYTES) return false;
+	const terminatorLength = seq.endsWith("\x1b\\") ? 2 : 1;
+	const body = seq.slice(2, -terminatorLength); // strip ESC] and BEL/ST
+	const firstSemi = body.indexOf(";");
+	const secondSemi = body.indexOf(";", firstSemi + 1);
+	if (!body.startsWith("52;") || secondSemi < 0) return false;
+	const payload = body.slice(secondSemi + 1).replace(/[\r\n]/g, "");
+	// Do not forward clipboard-read requests (OSC 52 ; ... ; ?) to the outer terminal.
+	if (payload === "?") return false;
+	return /^[A-Za-z0-9+/=]*$/.test(payload);
+}
+
+function sanitizeOscPayload(value: string): string {
+	return value.replace(/[\x00-\x1f\x7f]/g, "");
 }
 
 function center(text: string, width: number): string {
