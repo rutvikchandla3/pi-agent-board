@@ -3,31 +3,49 @@ export function clampInt(value, min, max) {
 }
 
 /**
- * Return +1 for wheel-up (scroll back), -1 for wheel-down, 0 for non-wheel input.
- * Supports SGR (1006) and X10/normal mouse encodings.
+ * Parse a terminal mouse report.
+ * Supports standard SGR (`CSI < ...`), passive SGR (`CSI ? ...`), and X10 mouse encodings.
  */
-export function mouseWheelDirection(data) {
-	// SGR mouse: ESC [ < button ; x ; y M/m. Wheel up/down are buttons 64/65
-	// plus optional modifier bits.
-	const sgr = /^\x1b\[<(\d+);\d+;\d+([Mm])$/.exec(data);
+export function parseMouseEvent(data) {
+	const sgr = /^\x1b\[(<|\?)(\d+);(\d+);(\d+)([Mm])$/.exec(data);
 	if (sgr) {
-		const button = Number(sgr[1]);
-		if (!Number.isFinite(button) || (button & 64) === 0) return 0;
-		const wheelButton = button & 3;
-		if (wheelButton === 0) return 1;
-		if (wheelButton === 1) return -1;
-		return 0; // horizontal wheel: ignore
+		const button = Number(sgr[2]);
+		const col = Number(sgr[3]);
+		const row = Number(sgr[4]);
+		if (!Number.isFinite(button) || !Number.isFinite(col) || !Number.isFinite(row)) return null;
+		return {
+			encoding: sgr[1] === "?" ? "passive" : "sgr",
+			button,
+			col,
+			row,
+			action: sgr[5] === "m" ? "release" : button & 32 ? "move" : "press",
+		};
 	}
 
 	// X10/normal mouse: ESC [ M Cb Cx Cy. Cb is encoded as button + 32.
 	if (data.startsWith("\x1b[M") && data.length >= 6) {
-		const button = data.charCodeAt(3) - 32;
-		if ((button & 64) === 0) return 0;
-		const wheelButton = button & 3;
-		if (wheelButton === 0) return 1;
-		if (wheelButton === 1) return -1;
+		return {
+			encoding: "x10",
+			button: data.charCodeAt(3) - 32,
+			col: data.charCodeAt(4) - 32,
+			row: data.charCodeAt(5) - 32,
+			action: (data.charCodeAt(3) - 32) & 32 ? "move" : "press",
+		};
 	}
-	return 0;
+	return null;
+}
+
+/**
+ * Return +1 for wheel-up (scroll back), -1 for wheel-down, 0 for non-wheel input.
+ * Supports standard/passive SGR and X10/normal mouse encodings.
+ */
+export function mouseWheelDirection(data) {
+	const mouse = parseMouseEvent(data);
+	if (!mouse || (mouse.button & 64) === 0) return 0;
+	const wheelButton = mouse.button & 3;
+	if (wheelButton === 0) return 1;
+	if (wheelButton === 1) return -1;
+	return 0; // horizontal wheel: ignore
 }
 
 /**

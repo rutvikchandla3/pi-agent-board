@@ -1,14 +1,55 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mouseWheelDirection, resizeJiggleSize, scrollViewportTop } from "../src/core/pty-scroll.mjs";
+import { mouseWheelDirection, parseMouseEvent, resizeJiggleSize, scrollViewportTop } from "../src/core/pty-scroll.mjs";
 
-test("mouseWheelDirection decodes SGR and X10 wheel events", () => {
+test("mouseWheelDirection decodes standard/passive SGR and X10 wheel events", () => {
 	assert.equal(mouseWheelDirection("\x1b[<64;10;20M"), 1);
 	assert.equal(mouseWheelDirection("\x1b[<65;10;20M"), -1);
+	assert.equal(mouseWheelDirection("\x1b[?64;10;20M"), 1);
+	assert.equal(mouseWheelDirection("\x1b[?65;10;20M"), -1);
 	assert.equal(mouseWheelDirection("\x1b[<66;10;20M"), 0);
 	assert.equal(mouseWheelDirection("\x1b[M`!!"), 1);
 	assert.equal(mouseWheelDirection("\x1b[Ma!!"), -1);
 	assert.equal(mouseWheelDirection("x"), 0);
+});
+
+test("parseMouseEvent decodes press, drag, and release events", () => {
+	assert.deepEqual(parseMouseEvent("\x1b[<0;10;20M"), {
+		encoding: "sgr",
+		button: 0,
+		col: 10,
+		row: 20,
+		action: "press",
+	});
+	assert.deepEqual(parseMouseEvent("\x1b[<32;11;20M"), {
+		encoding: "sgr",
+		button: 32,
+		col: 11,
+		row: 20,
+		action: "move",
+	});
+	assert.deepEqual(parseMouseEvent("\x1b[<0;11;20m"), {
+		encoding: "sgr",
+		button: 0,
+		col: 11,
+		row: 20,
+		action: "release",
+	});
+	assert.deepEqual(parseMouseEvent("\x1b[?32;7;8M"), {
+		encoding: "passive",
+		button: 32,
+		col: 7,
+		row: 8,
+		action: "move",
+	});
+	assert.deepEqual(parseMouseEvent("\x1b[M !!"), {
+		encoding: "x10",
+		button: 0,
+		col: 1,
+		row: 1,
+		action: "press",
+	});
+	assert.equal(parseMouseEvent("x"), null);
 });
 
 test("scrollViewportTop reports unconsumed scroll when no local scrollback can move", () => {

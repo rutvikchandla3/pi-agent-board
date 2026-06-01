@@ -1,10 +1,12 @@
 /** Live PTY attach surface for hosted agent-board rows. */
+import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import type { Component, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { clampInt, mouseWheelDirection, scrollViewportTop } from "../core/pty-scroll.mjs";
+import { findHttpUrlAtCells, findWordRangeAtCells } from "../core/pty-links.mjs";
+import { clampInt, mouseWheelDirection, parseMouseEvent, scrollViewportTop } from "../core/pty-scroll.mjs";
 
 export type PtyAttachResult = { action: "detached" } | { action: "closed"; exitCode?: number | null };
 
@@ -25,7 +27,9 @@ const { Terminal } = require("@xterm/headless") as { Terminal: new (opts: Record
 const DETACH_KEYS = new Set(["\x1d", "\x07"]); // ctrl+], ctrl+g
 const MOUSE_ENABLE = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const MOUSE_DISABLE = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+const XTSHIFTESCAPE_SELECT = "\x1b[>0s";
 const MOUSE_WHEEL_LINES = 5;
+const DOUBLE_CLICK_MS = 260;
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const LOADING_TICK_MS = 120;
 const OSC52_PREFIX = "\x1b]52;";
@@ -84,6 +88,10 @@ interface BufferCellLike {
 	isOverline(): number;
 }
 
+type MousePoint = { line: number; col: number };
+type MouseSelection = { anchor: MousePoint; focus: MousePoint };
+type NormalizedSelection = { start: MousePoint; end: MousePoint };
+
 export class PtyAttachComponent implements Component {
 	private socket: Socket | null = null;
 	private connected = false;
@@ -104,6 +112,11 @@ export class PtyAttachComponent implements Component {
 	private rows = 24;
 	// Absolute buffer line shown at the top of the viewport. null means follow bottom.
 	private viewportTop: number | null = null;
+	private selection: MouseSelection | null = null;
+	private selectionDragging = false;
+	private pendingClickTimer: ReturnType<typeof setTimeout> | null = null;
+	private lastClickPoint: MousePoint | null = null;
+	private lastClickAt = 0;
 	// Whether any PTY output (live or replayed) has been shown yet. Until then we paint a
 	// loading banner instead of an empty buffer so a slow (cold) host start doesn't leave
 	// the previous screen visible.
@@ -124,9 +137,9 @@ export class PtyAttachComponent implements Component {
 		this.cols = size.cols;
 		this.rows = size.rows;
 		this.term = new Terminal({ cols: this.cols, rows: this.rows, scrollback: 2000, allowProposedApi: true });
-		// Default to terminal-native mouse behavior so selection, copy, and link clicks
-		// work in Ghostty/tmux/etc. Opt back into attach-pane mouse scroll with
-		// AGENT_BOARD_ATTACH_MOUSE=1 (or legacy AGENT_BOARD_ENABLE_MOUSE_SCROLL=1).
+		// Keep mouse reporting enabled by default so wheel scrolling and local drag-to-copy
+		// selection can coexist inside the attach surface. Set AGENT_BOARD_ATTACH_MOUSE=0
+		// to fall back to terminal-native selection only.
 		this.disableMouseScroll();
 		this.enableMouseScroll();
 		this.refreshMouseScrollMode();
@@ -139,28 +152,39 @@ export class PtyAttachComponent implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (this.handleLocalMouse(data)) return;
 		const wheel = mouseWheelDirection(data);
 		if (wheel !== 0) {
+			this.clearPendingClick();
+			this.clearSelection();
 			if (this.tryScrollBy(wheel * MOUSE_WHEEL_LINES)) return;
 			this.send({ type: "input", data });
 			return;
 		}
 		if (matchesKey(data, Key.pageUp)) {
+			this.clearPendingClick();
+			this.clearSelection();
 			if (this.tryScrollBy(this.pageSize())) return;
 			this.send({ type: "input", data });
 			return;
 		}
 		if (matchesKey(data, Key.pageDown)) {
+			this.clearPendingClick();
+			this.clearSelection();
 			if (this.tryScrollBy(-this.pageSize())) return;
 			this.send({ type: "input", data });
 			return;
 		}
 		if (matchesKey(data, Key.home)) {
+			this.clearPendingClick();
+			this.clearSelection();
 			if (this.tryScrollToTop()) return;
 			this.send({ type: "input", data });
 			return;
 		}
 		if (matchesKey(data, Key.end)) {
+			this.clearPendingClick();
+			this.clearSelection();
 			if (this.tryScrollToBottom()) return;
 			this.send({ type: "input", data });
 			return;
@@ -174,6 +198,8 @@ export class PtyAttachComponent implements Component {
 			this.detach();
 			return;
 		}
+		this.clearPendingClick();
+		this.clearSelection();
 		this.scrollToBottom();
 		this.send({ type: "input", data });
 	}
@@ -191,7 +217,7 @@ export class PtyAttachComponent implements Component {
 		}
 		const header =
 			this.theme.fg("accent", this.theme.bold(` ${this.opts.title} `)) +
-			this.theme.fg("muted", `${this.status} · ← detach · ctrl+] detach`);
+			this.theme.fg("muted", `${this.status} · click opens links · dblclick/drag selects+copies · ← detach · ctrl+] detach`);
 		return [clip(header, width), ...body.map((l) => clipTerminalLine(l, width)), this.theme.fg("dim", "─".repeat(width))];
 	}
 
@@ -330,12 +356,17 @@ export class PtyAttachComponent implements Component {
 	private enableMouseScroll(): void {
 		if (!this.mouseScrollEnabled()) return;
 		try {
+			this.tui.terminal.write(XTSHIFTESCAPE_SELECT);
 			this.tui.terminal.write(MOUSE_ENABLE);
 		} catch {}
 	}
 
 	private mouseScrollEnabled(): boolean {
-		return process.env.AGENT_BOARD_ATTACH_MOUSE === "1" || process.env.AGENT_BOARD_ENABLE_MOUSE_SCROLL === "1";
+		const mode = (process.env.AGENT_BOARD_ATTACH_MOUSE ?? "").trim().toLowerCase();
+		if (mode === "0" || mode === "off" || mode === "false") return false;
+		if (mode === "1" || mode === "on" || mode === "true" || mode === "classic") return true;
+		if ((process.env.AGENT_BOARD_ENABLE_MOUSE_SCROLL ?? "").trim() === "0") return false;
+		return true;
 	}
 
 	private refreshMouseScrollMode(): void {
@@ -354,6 +385,183 @@ export class PtyAttachComponent implements Component {
 		try {
 			this.tui.terminal.write(MOUSE_DISABLE);
 		} catch {}
+	}
+
+	private handleLocalMouse(data: string): boolean {
+		const mouse = parseMouseEvent(data);
+		if (!mouse || (mouse.button & 64) !== 0) return false;
+		const primary = (mouse.button & 3) === 0;
+		if (mouse.action === "press") {
+			if (!primary) {
+				this.clearPendingClick();
+				this.clearSelection();
+				return true;
+			}
+			const point = this.mousePointForEvent(mouse.row, mouse.col, false);
+			if (!point) {
+				this.clearPendingClick();
+				this.clearSelection();
+				return true;
+			}
+			if (this.isDoubleClickCandidate(point)) this.clearPendingClick();
+			this.selection = { anchor: point, focus: point };
+			this.selectionDragging = false;
+			this.tui.requestRender();
+			return true;
+		}
+		if (!this.selection) return true;
+		if (mouse.action === "move") {
+			if (!primary) return true;
+			const point = this.mousePointForEvent(mouse.row, mouse.col, true);
+			if (!point) return true;
+			this.selection.focus = point;
+			this.selectionDragging = true;
+			this.tui.requestRender();
+			return true;
+		}
+		if (mouse.action === "release") {
+			const point = this.mousePointForEvent(mouse.row, mouse.col, true);
+			if (point) this.selection.focus = point;
+			const shouldCopy = this.selectionDragging;
+			this.selectionDragging = false;
+			if (shouldCopy) {
+				this.clearPendingClick();
+				this.lastClickPoint = null;
+				this.lastClickAt = 0;
+				this.copySelectionToClipboard();
+				this.tui.requestRender();
+				return true;
+			}
+			if (!point) {
+				this.clearPendingClick();
+				this.clearSelection();
+				return true;
+			}
+			if (this.isDoubleClickCandidate(point)) {
+				this.clearPendingClick();
+				this.lastClickPoint = null;
+				this.lastClickAt = 0;
+				if (!this.selectWordAtPoint(point)) this.selection = null;
+				this.tui.requestRender();
+				return true;
+			}
+			this.lastClickPoint = point;
+			this.lastClickAt = Date.now();
+			this.schedulePendingClick(point);
+			return true;
+		}
+		return true;
+	}
+
+	private mousePointForEvent(row: number, col: number, clampToBody: boolean): MousePoint | null {
+		const height = this.bodyHeight();
+		const bodyRow = row - 2;
+		if (!clampToBody && (bodyRow < 0 || bodyRow >= height)) return null;
+		const clampedRow = clampInt(bodyRow, 0, Math.max(0, height - 1));
+		this.clampViewportTop(height);
+		const start = this.viewportTop ?? this.bottomViewportTop(height);
+		const line = clampInt(start + clampedRow, 0, Math.max(0, this.term.buffer.active.length - 1));
+		const cellCol = clampInt(col - 1, 0, Math.max(0, this.cols - 1));
+		return { line, col: cellCol };
+	}
+
+	private isDoubleClickCandidate(point: MousePoint): boolean {
+		return !!this.lastClickPoint && Date.now() - this.lastClickAt <= DOUBLE_CLICK_MS && sameMousePoint(this.lastClickPoint, point);
+	}
+
+	private schedulePendingClick(point: MousePoint): void {
+		this.clearPendingClick();
+		this.pendingClickTimer = setTimeout(() => {
+			this.pendingClickTimer = null;
+			this.lastClickPoint = null;
+			this.lastClickAt = 0;
+			if (this.closed) return;
+			this.openLinkAtPoint(point);
+			this.selection = null;
+			this.selectionDragging = false;
+			this.tui.requestRender();
+		}, DOUBLE_CLICK_MS);
+		this.pendingClickTimer.unref?.();
+	}
+
+	private clearPendingClick(): void {
+		if (!this.pendingClickTimer) return;
+		clearTimeout(this.pendingClickTimer);
+		this.pendingClickTimer = null;
+	}
+
+	private selectWordAtPoint(point: MousePoint): boolean {
+		const buf = this.term.buffer.active;
+		const line = buf.getLine(point.line);
+		if (!line) return false;
+		const reusable = buf.getNullCell();
+		const range = findWordRangeAtCells(asciiCellsForBufferLine(line, reusable), point.col);
+		if (!range) return false;
+		this.selection = {
+			anchor: { line: point.line, col: range.start },
+			focus: { line: point.line, col: range.end },
+		};
+		this.selectionDragging = false;
+		this.copySelectionToClipboard();
+		return true;
+	}
+
+	private openLinkAtPoint(point: MousePoint): boolean {
+		const target = this.linkAtPoint(point);
+		return target ? openExternalTarget(target) : false;
+	}
+
+	private linkAtPoint(point: MousePoint): string | null {
+		const buf = this.term.buffer.active;
+		const line = buf.getLine(point.line);
+		if (!line) return null;
+		const reusable = buf.getNullCell();
+		const cell = line.getCell(point.col, reusable);
+		const osc8 = cell ? osc8UriForCell(this.term, cell) : "";
+		if (osc8) return osc8;
+		return findHttpUrlAtCells(asciiCellsForBufferLine(line, reusable), point.col);
+	}
+
+	private clearSelection(): void {
+		if (!this.selection && !this.selectionDragging) return;
+		this.selection = null;
+		this.selectionDragging = false;
+		this.tui.requestRender();
+	}
+
+	private copySelectionToClipboard(): void {
+		const text = this.selectionText();
+		if (!text) return;
+		const seq = osc52CopySequence(text);
+		if (!seq) return;
+		try {
+			this.tui.terminal.write(seq);
+		} catch {}
+	}
+
+	private selectionText(): string {
+		const range = normalizeSelection(this.selection);
+		if (!range) return "";
+		const buf = this.term.buffer.active;
+		const reusable = buf.getNullCell();
+		const parts: string[] = [];
+		for (let lineIndex = range.start.line; lineIndex <= range.end.line; lineIndex++) {
+			const line = buf.getLine(lineIndex);
+			if (!line) {
+				parts.push("");
+				continue;
+			}
+			const from = lineIndex === range.start.line ? range.start.col : 0;
+			const to = lineIndex === range.end.line ? range.end.col : line.length - 1;
+			let text = "";
+			for (let x = Math.max(0, from); x <= Math.max(from, to); x++) {
+				const cell = line.getCell(x, reusable);
+				if (!cell || cell.getWidth() === 0) continue;
+				text += cell.getChars() || " ";
+			}
+			parts.push(text.replace(/\s+$/u, ""));
+		}
+		return parts.join("\n").replace(/^\n+|\n+$/gu, "");
 	}
 
 	private currentSize(): { cols: number; rows: number } {
@@ -534,12 +742,13 @@ export class PtyAttachComponent implements Component {
 	private project(height: number, width: number): string[] {
 		const out: string[] = [];
 		const buf = this.term.buffer.active;
+		const selection = normalizeSelection(this.selection);
 		this.clampViewportTop(height);
 		const start = this.viewportTop ?? this.bottomViewportTop(height);
 		const end = Math.min(buf.length, start + height);
 		const reusable = buf.getNullCell();
 		for (let i = start; i < end; i++) {
-			out.push(clipTerminalLine(lineToAnsi(buf.getLine(i), reusable, this.term), width));
+			out.push(clipTerminalLine(lineToAnsi(buf.getLine(i), reusable, this.term, i, selection), width));
 		}
 		if (out.length === 0) out.push("Waiting for PTY output…");
 		return out.slice(-height);
@@ -549,6 +758,7 @@ export class PtyAttachComponent implements Component {
 		this.closed = true;
 		this.disableMouseScroll();
 		this.clearMouseRefreshTimers();
+		this.clearPendingClick();
 		this.clearRetry();
 		this.clearRedrawTimer();
 		this.stopLoadingTicker();
@@ -567,7 +777,77 @@ function localResizeJiggleSize(cols: number, rows: number): { cols: number; rows
 	return null;
 }
 
-function lineToAnsi(line: BufferLineLike | undefined, reusable: BufferCellLike, term: XtermLike): string {
+function sameMousePoint(a: MousePoint, b: MousePoint): boolean {
+	return a.line === b.line && Math.abs(a.col - b.col) <= 1;
+}
+
+function asciiCellsForBufferLine(line: BufferLineLike, reusable: BufferCellLike): string[] {
+	const cells: string[] = [];
+	for (let x = 0; x < line.length; x++) {
+		const cell = line.getCell(x, reusable);
+		if (!cell || cell.getWidth() === 0) {
+			cells.push(" ");
+			continue;
+		}
+		const chars = cell.getChars() || " ";
+		cells.push(chars.length === 1 && chars >= " " && chars <= "~" ? chars : " ");
+	}
+	return cells;
+}
+
+function openExternalTarget(target: string): boolean {
+	const sanitized = sanitizeOscPayload(target).trim();
+	if (!sanitized) return false;
+	try {
+		if (process.platform === "darwin") {
+			spawn("open", [sanitized], { detached: true, stdio: "ignore" }).unref();
+			return true;
+		}
+		if (process.platform === "win32") {
+			spawn("cmd", ["/c", "start", "", sanitized], { detached: true, stdio: "ignore" }).unref();
+			return true;
+		}
+		spawn("xdg-open", [sanitized], { detached: true, stdio: "ignore" }).unref();
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function compareMousePoints(a: MousePoint, b: MousePoint): number {
+	return a.line === b.line ? a.col - b.col : a.line - b.line;
+}
+
+function normalizeSelection(selection: MouseSelection | null): NormalizedSelection | null {
+	if (!selection) return null;
+	return compareMousePoints(selection.anchor, selection.focus) <= 0
+		? { start: selection.anchor, end: selection.focus }
+		: { start: selection.focus, end: selection.anchor };
+}
+
+function pointWithinSelection(line: number, col: number, selection: NormalizedSelection | null): boolean {
+	if (!selection) return false;
+	if (line < selection.start.line || line > selection.end.line) return false;
+	if (selection.start.line === selection.end.line) return col >= selection.start.col && col <= selection.end.col;
+	if (line === selection.start.line) return col >= selection.start.col;
+	if (line === selection.end.line) return col <= selection.end.col;
+	return true;
+}
+
+function osc52CopySequence(text: string): string {
+	if (!text) return "";
+	const data = Buffer.from(text, "utf8").toString("base64");
+	const seq = `\x1b]52;c;${data}\x07`;
+	return Buffer.byteLength(seq, "utf8") <= OSC52_MAX_BYTES ? seq : "";
+}
+
+function lineToAnsi(
+	line: BufferLineLike | undefined,
+	reusable: BufferCellLike,
+	term: XtermLike,
+	lineIndex: number,
+	selection: NormalizedSelection | null,
+): string {
 	if (!line) return "";
 	let last = -1;
 	for (let x = 0; x < line.length; x++) {
@@ -589,9 +869,10 @@ function lineToAnsi(line: BufferLineLike | undefined, reusable: BufferCellLike, 
 			if (uri) out += openOsc8(uri);
 			prevUri = uri;
 		}
-		const key = attrKey(cell);
+		const selected = pointWithinSelection(lineIndex, x, selection);
+		const key = attrKey(cell, selected);
 		if (key !== prevAttr) {
-			out += attrsToAnsi(cell);
+			out += attrsToAnsi(cell, selected);
 			prevAttr = key;
 		}
 		out += cell.getChars() || " ";
@@ -600,8 +881,9 @@ function lineToAnsi(line: BufferLineLike | undefined, reusable: BufferCellLike, 
 	return out + "\x1b[0m";
 }
 
-function attrKey(cell: BufferCellLike): string {
+function attrKey(cell: BufferCellLike, selected = false): string {
 	return [
+		selected ? 1 : 0,
 		cell.isBold(),
 		cell.isDim(),
 		cell.isItalic(),
@@ -620,14 +902,14 @@ function attrKey(cell: BufferCellLike): string {
 	].join(";");
 }
 
-function attrsToAnsi(cell: BufferCellLike): string {
+function attrsToAnsi(cell: BufferCellLike, selected = false): string {
 	const codes: string[] = ["0"];
 	if (cell.isBold()) codes.push("1");
 	if (cell.isDim()) codes.push("2");
 	if (cell.isItalic()) codes.push("3");
 	if (cell.isUnderline()) codes.push("4");
 	if (cell.isBlink()) codes.push("5");
-	if (cell.isInverse()) codes.push("7");
+	if (cell.isInverse() || selected) codes.push("7");
 	if (cell.isInvisible()) codes.push("8");
 	if (cell.isStrikethrough()) codes.push("9");
 	if (cell.isOverline()) codes.push("53");
