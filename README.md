@@ -22,7 +22,7 @@ From npm:
 pi install npm:pi-agent-board
 pi                          # then type /agent-board
 # or launch straight into the dashboard UI:
-pi --agent-board
+pi /agent-board
 ```
 
 From a local checkout while developing:
@@ -45,7 +45,7 @@ pi
 ## What it does
 
 - **`/agent-board`** opens a full-screen dashboard, global across projects.
-- **`pi --agent-board`** starts directly in a cleaner dashboard-first UI (no normal Pi header/footer chrome) and quits Pi when you leave it.
+- **`pi /agent-board`** starts directly in a cleaner dashboard-first UI (no normal Pi header/footer chrome) and quits Pi when you leave it.
 - **Dispatch** by typing in the bottom input and pressing `enter` → a **Start session** dialog opens with default focus on **Start session**; press `enter` again to launch, or change **cwd**, **model**, and **thinking** first. The dialog remembers your last launch defaults and prefers scoped models for the selected cwd when Pi settings define them.
 - **Live rows** grouped by stage: Queued · Running · Needs input · In Progress · Done · Failed · Stopped.
 - **Peek** (`space`) a row for its summary, blocker/question, and latest output; **reply** (`r`) inline without attaching.
@@ -60,7 +60,7 @@ pi
 ```text
 You
  │
- │  /agent-board or pi --agent-board
+ │  /agent-board or pi /agent-board
  ▼
 Agent Board TUI ── dispatch prompt ──▶ detached runner ──▶ background pi session
       ▲                                      │                    │

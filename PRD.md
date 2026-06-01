@@ -95,7 +95,7 @@ A Pi power user working on several independent coding tasks at once.
 V1 should support:
 
 - `/agent-board` — open the dashboard from within Pi.
-- Optional extension flag such as `--agent-board` if practical.
+- CLI slash-command entrypoint such as `pi /agent-board`, if Pi supports passing slash commands at startup.
 
 Stretch goals:
 

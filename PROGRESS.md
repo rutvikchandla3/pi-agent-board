@@ -53,10 +53,10 @@ Status legend: ☐ todo · ◐ in progress · ☑ done
 - Changed the main dashboard UX to match the Claude-style screenshot more closely: the bottom
   input is always available, typing there and pressing **Enter** dispatches a new Pi session,
   and **Enter** on an empty input attaches to the selected session.
-- Added `--agent-board` via `pi.registerFlag("agent-board")`; on `session_start(reason:"startup")`
-  the extension now opens the dashboard **directly** from the startup event with hidden Pi
-  header/footer chrome, so users can launch with `pi --agent-board` into a cleaner fullscreen
-  surface. Quitting that dashboard exits Pi instead of dropping into a chat session.
+- Added a startup entrypoint; on `session_start(reason:"startup")` the extension opens the
+  dashboard **directly** from the startup event with hidden Pi header/footer chrome, so users
+  can launch with `pi /agent-board` into a cleaner fullscreen surface. Quitting that dashboard
+  exits Pi instead of dropping into a chat session.
 
 
 ### CP2 — 2026-05-30 — full MVP wired (M2–M5) + ⚠️ real-worker hang found

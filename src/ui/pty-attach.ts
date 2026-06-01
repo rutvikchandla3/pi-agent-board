@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import type { Component, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { isProbablyEmptyPiInputLine } from "../core/pty-input.mjs";
 import { findHttpUrlAtCells, findWordRangeAtCells } from "../core/pty-links.mjs";
 import { clampInt, mouseWheelDirection, parseMouseEvent, scrollViewportTop } from "../core/pty-scroll.mjs";
 
@@ -46,6 +47,7 @@ interface XtermLike {
 	buffer: {
 		active: {
 			baseY: number;
+			cursorY?: number;
 			length: number;
 			getLine(index: number): BufferLineLike | undefined;
 			getNullCell(): BufferCellLike;
@@ -195,7 +197,14 @@ export class PtyAttachComponent implements Component {
 			matchesKey(data, Key.ctrl("]")) ||
 			matchesKey(data, Key.ctrl("g"))
 		) {
-			this.detach();
+			if (this.childInputLooksEmpty()) {
+				this.detach();
+				return;
+			}
+			this.clearPendingClick();
+			this.clearSelection();
+			this.scrollToBottom();
+			this.send({ type: "input", data });
 			return;
 		}
 		this.clearPendingClick();
@@ -255,6 +264,14 @@ export class PtyAttachComponent implements Component {
 		this.send({ type: "detach" });
 		this.close();
 		this.done({ action: "detached" });
+	}
+
+	private childInputLooksEmpty(): boolean {
+		if (!this.receivedOutput) return true;
+		const active = this.term.buffer.active;
+		if (typeof active.cursorY !== "number") return false;
+		const line = active.getLine(active.baseY + active.cursorY)?.translateToString(true) ?? "";
+		return isProbablyEmptyPiInputLine(line);
 	}
 
 	private connect(): void {

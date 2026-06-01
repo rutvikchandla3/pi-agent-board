@@ -69,8 +69,8 @@ pi
 ## 4. Drive the dashboard
 
 Inside pi:
-1. Type `/agent-board`, or start with `pi --agent-board` → the full-screen dashboard opens.
-   - With `pi --agent-board`, quitting the dashboard exits Pi instead of dropping you into a normal chat session.
+1. Type `/agent-board`, or start with `pi /agent-board` → the full-screen dashboard opens.
+   - With `pi /agent-board`, quitting the dashboard exits Pi instead of dropping you into a normal chat session.
    - The startup path should feel cleaner than `/agent-board`: no normal Pi header/footer chrome and no dispatch notifications above the dashboard.
 2. Type a task in the bottom input (e.g. `list the files in this repo and summarize the README`), then press **Enter**.
    - A **Start session** dialog opens with **Start session** focused by default.

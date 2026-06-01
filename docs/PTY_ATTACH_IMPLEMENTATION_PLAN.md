@@ -333,7 +333,7 @@ This would give true terminal proxy behavior, but requires Pi core work outside 
 
 Current extension mirrors events for any managed foreground session. Adjust it for hosted child processes:
 
-- if `process.env.AGENT_BOARD_CHILD === "1"`, skip `--agent-board` dashboard auto-open handling,
+- if `process.env.AGENT_BOARD_CHILD === "1"`, skip dashboard auto-open handling,
 - still register event listeners,
 - when `AGENT_BOARD_VIEW_ID` is present, mirror events directly to that row,
 - keep footer status disabled/no-op in child to avoid confusing nested hosted Pi.
