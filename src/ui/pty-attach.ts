@@ -7,7 +7,8 @@ import type { Component, KeybindingsManager, TUI } from "@earendil-works/pi-tui"
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { isProbablyEmptyPiInputLine } from "../core/pty-input.mjs";
 import { findHttpUrlAtCells, findWordRangeAtCells } from "../core/pty-links.mjs";
-import { clampInt, mouseWheelDirection, parseMouseEvent, scrollViewportTop } from "../core/pty-scroll.mjs";
+import { nextAttachRender, shouldScheduleAttachRenderForMessage } from "../core/pty-attach-render.mjs";
+import { clampInt, parseMouseInputChunk, scrollViewportTop } from "../core/pty-scroll.mjs";
 
 export type PtyAttachResult = { action: "detached" } | { action: "closed"; exitCode?: number | null };
 
@@ -154,15 +155,8 @@ export class PtyAttachComponent implements Component {
 	}
 
 	handleInput(data: string): void {
-		if (this.handleLocalMouse(data)) return;
-		const wheel = mouseWheelDirection(data);
-		if (wheel !== 0) {
-			this.clearPendingClick();
-			this.clearSelection();
-			if (this.tryScrollBy(wheel * MOUSE_WHEEL_LINES)) return;
-			this.send({ type: "input", data });
-			return;
-		}
+		const mouseInput = parseMouseInputChunk(data);
+		if (mouseInput && this.handleMouseInputChunk(mouseInput)) return;
 		if (matchesKey(data, Key.pageUp)) {
 			this.clearPendingClick();
 			this.clearSelection();
@@ -318,9 +312,10 @@ export class PtyAttachComponent implements Component {
 	 * session can't ghost behind us); all later paints are coalesced + throttled + differential
 	 * by the TUI, so bursts of wheel/output events don't each clear-and-repaint the whole screen.
 	 */
-	private scheduleRender(): void {
-		this.tui.requestRender(this.firstPaint);
-		this.firstPaint = false;
+	private scheduleRender(force = false): void {
+		const next = nextAttachRender(this.firstPaint, force);
+		this.firstPaint = next.firstPaint;
+		this.tui.requestRender(next.force);
 	}
 
 	private scheduleReconnect(): void {
@@ -404,37 +399,55 @@ export class PtyAttachComponent implements Component {
 		} catch {}
 	}
 
-	private handleLocalMouse(data: string): boolean {
-		const mouse = parseMouseEvent(data);
-		if (!mouse || (mouse.button & 64) !== 0) return false;
+	private handleMouseInputChunk(events: Array<{ raw: string; mouse: { button: number; row: number; col: number; action: string } }>): boolean {
+		let handled = false;
+		for (const entry of events) {
+			const { mouse, raw } = entry;
+			if ((mouse.button & 64) !== 0) {
+				handled = true;
+				const wheelButton = mouse.button & 3;
+				const wheel = wheelButton === 0 ? 1 : wheelButton === 1 ? -1 : 0;
+				if (wheel === 0) continue;
+				this.clearPendingClick();
+				this.clearSelection();
+				if (!this.tryScrollBy(wheel * MOUSE_WHEEL_LINES)) this.send({ type: "input", data: raw });
+				continue;
+			}
+			handled = true;
+			this.handleLocalMouseEvent(mouse);
+		}
+		return handled;
+	}
+
+	private handleLocalMouseEvent(mouse: { button: number; row: number; col: number; action: string }): void {
 		const primary = (mouse.button & 3) === 0;
 		if (mouse.action === "press") {
 			if (!primary) {
 				this.clearPendingClick();
 				this.clearSelection();
-				return true;
+				return;
 			}
 			const point = this.mousePointForEvent(mouse.row, mouse.col, false);
 			if (!point) {
 				this.clearPendingClick();
 				this.clearSelection();
-				return true;
+				return;
 			}
 			if (this.isDoubleClickCandidate(point)) this.clearPendingClick();
 			this.selection = { anchor: point, focus: point };
 			this.selectionDragging = false;
-			this.tui.requestRender();
-			return true;
+			this.scheduleRender();
+			return;
 		}
-		if (!this.selection) return true;
+		if (!this.selection) return;
 		if (mouse.action === "move") {
-			if (!primary) return true;
+			if (!primary) return;
 			const point = this.mousePointForEvent(mouse.row, mouse.col, true);
-			if (!point) return true;
+			if (!point) return;
 			this.selection.focus = point;
 			this.selectionDragging = true;
-			this.tui.requestRender();
-			return true;
+			this.scheduleRender();
+			return;
 		}
 		if (mouse.action === "release") {
 			const point = this.mousePointForEvent(mouse.row, mouse.col, true);
@@ -446,28 +459,26 @@ export class PtyAttachComponent implements Component {
 				this.lastClickPoint = null;
 				this.lastClickAt = 0;
 				this.copySelectionToClipboard();
-				this.tui.requestRender();
-				return true;
+				this.scheduleRender();
+				return;
 			}
 			if (!point) {
 				this.clearPendingClick();
 				this.clearSelection();
-				return true;
+				return;
 			}
 			if (this.isDoubleClickCandidate(point)) {
 				this.clearPendingClick();
 				this.lastClickPoint = null;
 				this.lastClickAt = 0;
 				if (!this.selectWordAtPoint(point)) this.selection = null;
-				this.tui.requestRender();
-				return true;
+				this.scheduleRender();
+				return;
 			}
 			this.lastClickPoint = point;
 			this.lastClickAt = Date.now();
 			this.schedulePendingClick(point);
-			return true;
 		}
-		return true;
 	}
 
 	private mousePointForEvent(row: number, col: number, clampToBody: boolean): MousePoint | null {
@@ -652,8 +663,7 @@ export class PtyAttachComponent implements Component {
 	}
 
 	private requestScrollRender(): void {
-		this.enableMouseScroll();
-		this.tui.requestRender(true);
+		this.scheduleRender();
 	}
 
 	private bodyHeight(): number {
@@ -684,6 +694,7 @@ export class PtyAttachComponent implements Component {
 		this.parserBuffer += text;
 		const lines = this.parserBuffer.split("\n");
 		this.parserBuffer = lines.pop() ?? "";
+		let needsRender = false;
 		for (const line of lines) {
 			if (!line.trim()) continue;
 			try {
@@ -691,16 +702,19 @@ export class PtyAttachComponent implements Component {
 				if (msg.type === "output" && typeof msg.data === "string") {
 					this.pushOutput(msg.data, { forwardProtocols: true });
 					this.forceChildRedrawAfterLiveOutput();
-				} else if (msg.type === "hello" || msg.type === "status") this.status = "attached";
+					continue;
+				}
+				if (msg.type === "hello" || msg.type === "status") this.status = "attached";
 				else if (msg.type === "exit") {
 					this.status = "host exited";
 					this.done({ action: "closed", exitCode: msg.exitCode ?? null });
 				} else if (msg.type === "error") this.status = `error: ${msg.message ?? "host error"}`;
+				if (shouldScheduleAttachRenderForMessage(msg.type)) needsRender = true;
 			} catch {
 				// Ignore malformed protocol lines; raw PTY data is only legal inside output.data.
 			}
 		}
-		this.scheduleRender();
+		if (needsRender) this.scheduleRender();
 	}
 
 	private forceChildRedrawAfterLiveOutput(): void {

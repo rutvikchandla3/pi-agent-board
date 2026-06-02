@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mouseWheelDirection, parseMouseEvent, resizeJiggleSize, scrollViewportTop } from "../src/core/pty-scroll.mjs";
+import { mouseWheelDirection, parseMouseEvent, parseMouseInputChunk, resizeJiggleSize, scrollViewportTop } from "../src/core/pty-scroll.mjs";
 
 test("mouseWheelDirection decodes standard/passive SGR and X10 wheel events", () => {
 	assert.equal(mouseWheelDirection("\x1b[<64;10;20M"), 1);
@@ -50,6 +50,24 @@ test("parseMouseEvent decodes press, drag, and release events", () => {
 		action: "press",
 	});
 	assert.equal(parseMouseEvent("x"), null);
+});
+
+test("parseMouseInputChunk decodes concatenated mouse reports and rejects mixed input", () => {
+	assert.deepEqual(parseMouseInputChunk("\x1b[<64;10;20M\x1b[<65;10;20M"), [
+		{
+			length: "\x1b[<64;10;20M".length,
+			raw: "\x1b[<64;10;20M",
+			mouse: { encoding: "sgr", button: 64, col: 10, row: 20, action: "press" },
+		},
+		{
+			length: "\x1b[<65;10;20M".length,
+			raw: "\x1b[<65;10;20M",
+			mouse: { encoding: "sgr", button: 65, col: 10, row: 20, action: "press" },
+		},
+	]);
+	assert.equal(parseMouseInputChunk("\x1b[<64;10;20Mx"), null);
+	assert.equal(parseMouseInputChunk("x\x1b[<64;10;20M"), null);
+	assert.equal(parseMouseInputChunk(""), null);
 });
 
 test("scrollViewportTop reports unconsumed scroll when no local scrollback can move", () => {
