@@ -99,6 +99,22 @@ export function scrollViewportTop(viewportTop, bottom, linesUp) {
 }
 
 /**
+ * Decide whether drag-selecting at/just beyond the viewport edge should auto-scroll.
+ * Positive values scroll up into older output; negative values scroll down.
+ */
+export function selectionDragScrollLines(row, bodyHeight) {
+	const safeHeight = Math.max(1, Math.floor(bodyHeight));
+	const topRow = 2;
+	const bottomRow = topRow + safeHeight - 1;
+	const pointerRow = Math.floor(row);
+	if (pointerRow < topRow) return 2;
+	if (pointerRow === topRow) return 1;
+	if (pointerRow > bottomRow) return -2;
+	if (pointerRow === bottomRow) return -1;
+	return 0;
+}
+
+/**
  * Return a one-frame alternate PTY size that will force a hosted TUI to receive a
  * SIGWINCH/redraw before restoring the real size. This mirrors the user-visible
  * terminal zoom workaround without leaving the child at the wrong dimensions.

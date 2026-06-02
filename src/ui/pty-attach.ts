@@ -8,7 +8,7 @@ import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/
 import { isProbablyEmptyPiInputLine } from "../core/pty-input.mjs";
 import { findHttpUrlAtCells, findWordRangeAtCells } from "../core/pty-links.mjs";
 import { nextAttachRender, shouldScheduleAttachRenderForMessage } from "../core/pty-attach-render.mjs";
-import { clampInt, parseMouseInputChunk, scrollViewportTop } from "../core/pty-scroll.mjs";
+import { clampInt, parseMouseInputChunk, scrollViewportTop, selectionDragScrollLines } from "../core/pty-scroll.mjs";
 
 export type PtyAttachResult = { action: "detached" } | { action: "closed"; exitCode?: number | null };
 
@@ -117,6 +117,9 @@ export class PtyAttachComponent implements Component {
 	private viewportTop: number | null = null;
 	private selection: MouseSelection | null = null;
 	private selectionDragging = false;
+	private selectionAutoScrollTimer: ReturnType<typeof setInterval> | null = null;
+	private selectionAutoScrollLines = 0;
+	private selectionAutoScrollMouse: { row: number; col: number } | null = null;
 	private pendingClickTimer: ReturnType<typeof setTimeout> | null = null;
 	private lastClickPoint: MousePoint | null = null;
 	private lastClickAt = 0;
@@ -419,9 +422,42 @@ export class PtyAttachComponent implements Component {
 		return handled;
 	}
 
+	private updateSelectionAutoScroll(row: number, col: number): void {
+		this.selectionAutoScrollMouse = { row, col };
+		if (!this.selection || !this.selectionDragging) return this.clearSelectionAutoScroll(false);
+		const lines = selectionDragScrollLines(row, this.bodyHeight());
+		if (lines === 0) return this.clearSelectionAutoScroll(false);
+		if (this.selectionAutoScrollTimer && this.selectionAutoScrollLines === lines) return;
+		this.clearSelectionAutoScroll(false);
+		this.selectionAutoScrollLines = lines;
+		this.selectionAutoScrollTimer = setInterval(() => this.tickSelectionAutoScroll(), 50);
+		this.selectionAutoScrollTimer.unref?.();
+	}
+
+	private tickSelectionAutoScroll(): void {
+		if (this.closed || !this.selection || !this.selectionDragging || !this.selectionAutoScrollMouse || !this.selectionAutoScrollLines) {
+			this.clearSelectionAutoScroll();
+			return;
+		}
+		const changed = this.tryScrollBy(this.selectionAutoScrollLines);
+		const point = this.mousePointForEvent(this.selectionAutoScrollMouse.row, this.selectionAutoScrollMouse.col, true);
+		if (point) this.selection.focus = point;
+		if (!changed) this.clearSelectionAutoScroll(false);
+	}
+
+	private clearSelectionAutoScroll(clearPointer = true): void {
+		if (this.selectionAutoScrollTimer) {
+			clearInterval(this.selectionAutoScrollTimer);
+			this.selectionAutoScrollTimer = null;
+		}
+		this.selectionAutoScrollLines = 0;
+		if (clearPointer) this.selectionAutoScrollMouse = null;
+	}
+
 	private handleLocalMouseEvent(mouse: { button: number; row: number; col: number; action: string }): void {
 		const primary = (mouse.button & 3) === 0;
 		if (mouse.action === "press") {
+			this.clearSelectionAutoScroll();
 			if (!primary) {
 				this.clearPendingClick();
 				this.clearSelection();
@@ -446,10 +482,12 @@ export class PtyAttachComponent implements Component {
 			if (!point) return;
 			this.selection.focus = point;
 			this.selectionDragging = true;
+			this.updateSelectionAutoScroll(mouse.row, mouse.col);
 			this.scheduleRender();
 			return;
 		}
 		if (mouse.action === "release") {
+			this.clearSelectionAutoScroll();
 			const point = this.mousePointForEvent(mouse.row, mouse.col, true);
 			if (point) this.selection.focus = point;
 			const shouldCopy = this.selectionDragging;
@@ -551,10 +589,11 @@ export class PtyAttachComponent implements Component {
 	}
 
 	private clearSelection(): void {
+		this.clearSelectionAutoScroll();
 		if (!this.selection && !this.selectionDragging) return;
 		this.selection = null;
 		this.selectionDragging = false;
-		this.tui.requestRender();
+		this.scheduleRender();
 	}
 
 	private copySelectionToClipboard(): void {
@@ -790,6 +829,7 @@ export class PtyAttachComponent implements Component {
 		this.disableMouseScroll();
 		this.clearMouseRefreshTimers();
 		this.clearPendingClick();
+		this.clearSelectionAutoScroll();
 		this.clearRetry();
 		this.clearRedrawTimer();
 		this.stopLoadingTicker();

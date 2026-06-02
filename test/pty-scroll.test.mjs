@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mouseWheelDirection, parseMouseEvent, parseMouseInputChunk, resizeJiggleSize, scrollViewportTop } from "../src/core/pty-scroll.mjs";
+import {
+	mouseWheelDirection,
+	parseMouseEvent,
+	parseMouseInputChunk,
+	resizeJiggleSize,
+	scrollViewportTop,
+	selectionDragScrollLines,
+} from "../src/core/pty-scroll.mjs";
 
 test("mouseWheelDirection decodes standard/passive SGR and X10 wheel events", () => {
 	assert.equal(mouseWheelDirection("\x1b[<64;10;20M"), 1);
@@ -80,6 +87,15 @@ test("scrollViewportTop consumes gestures that move local scrollback", () => {
 	assert.deepEqual(scrollViewportTop(null, 20, 5), { viewportTop: 15, changed: true });
 	assert.deepEqual(scrollViewportTop(15, 20, -5), { viewportTop: null, changed: true });
 	assert.deepEqual(scrollViewportTop(15, 20, 20), { viewportTop: 0, changed: true });
+});
+
+test("selectionDragScrollLines starts autoscroll at the viewport edge", () => {
+	assert.equal(selectionDragScrollLines(1, 10), 2);
+	assert.equal(selectionDragScrollLines(2, 10), 1);
+	assert.equal(selectionDragScrollLines(3, 10), 0);
+	assert.equal(selectionDragScrollLines(10, 10), 0);
+	assert.equal(selectionDragScrollLines(11, 10), -1);
+	assert.equal(selectionDragScrollLines(12, 10), -2);
 });
 
 test("resizeJiggleSize chooses a safe temporary size to force child redraw", () => {
