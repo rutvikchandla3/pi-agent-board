@@ -112,9 +112,11 @@ test("finalizeRun -> stopped when stoppedByUser", () => {
 test("projectViewState mirrors status", () => {
 	const s = createRunStatus(cfg(), 5, 1000);
 	reduceEvent(s, { type: "tool_execution_start", toolName: "edit", args: { file_path: "a.ts" } }, 2000);
-	const vs = projectViewState(s, 2500);
+	const vs = projectViewState(s, 2500, { lastVisitedAt: 1500 });
 	assert.equal(vs.viewId, "view_a");
 	assert.equal(vs.currentRunId, "run_1");
 	assert.equal(vs.semanticState, "working");
 	assert.deepEqual(vs.latestTool, { name: "edit", path: "a.ts" });
+	assert.equal(vs.lastVisitedAt, 1500);
+	assert.equal(vs.lastAgentActivityAt, 2000);
 });

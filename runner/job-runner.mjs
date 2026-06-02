@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { appendLine, readJson } from "../src/core/atomic.mjs";
 import { createRunStatus, finalizeRun, projectViewState, reduceEvent } from "../src/core/events.mjs";
 import * as P from "../src/core/paths.mjs";
-import { writeState, writeStatus } from "../src/core/store.mjs";
+import { readState, writeState, writeStatus } from "../src/core/store.mjs";
 
 const WRITE_THROTTLE_MS = 250;
 
@@ -37,7 +37,7 @@ function main() {
 
 	let status = createRunStatus(config, null, Date.now());
 	writeStatus(root, status);
-	writeState(root, projectViewState(status, Date.now()));
+	writeState(root, projectViewState(status, Date.now(), readState(root, viewId)));
 
 	// Build worker args: pi --mode json -p --session <file> [--model m] [--thinking l] [--tools t] <prompt>
 	const args = [
@@ -69,7 +69,7 @@ function main() {
 	const persist = (force = false) => {
 		const now = Date.now();
 		writeStatus(root, status);
-		writeState(root, projectViewState(status, now));
+		writeState(root, projectViewState(status, now, readState(root, viewId)));
 		dirty = false;
 	};
 

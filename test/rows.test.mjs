@@ -19,6 +19,8 @@ function row(id, semanticState, extra = {}) {
 			semanticState,
 			summary: extra.summary ?? "",
 			lastActivityAt: extra.lastActivityAt ?? 0,
+			lastVisitedAt: extra.lastVisitedAt ?? null,
+			lastAgentActivityAt: extra.lastAgentActivityAt ?? null,
 		},
 		alive: extra.alive ?? false,
 	};
@@ -53,6 +55,11 @@ test("rowView exposes folder place for dashboard rows", () => {
 test("rowView normalizes generic status labels to current display names", () => {
 	assert.equal(rowView(row("a", "working", { summary: "Working…" }), 0).summary, "Running…");
 	assert.equal(rowView(row("b", "idle", { summary: "Idle" }), 0).summary, "In Progress");
+});
+
+test("rowView exposes unread when newer agent activity exists", () => {
+	assert.equal(rowView(row("a", "idle", { lastVisitedAt: 10, lastAgentActivityAt: 20 }), 0).unread, true);
+	assert.equal(rowView(row("b", "idle", { lastVisitedAt: 30, lastAgentActivityAt: 20 }), 0).unread, false);
 });
 
 test("parseFilter splits state + terms", () => {
@@ -94,5 +101,13 @@ test("filterRows empty query returns all", () => {
 test("stateGlyph distinguishes alive working", () => {
 	assert.equal(stateGlyph("working", true), "●");
 	assert.equal(stateGlyph("working", false), "◐");
-	assert.equal(stateGlyph("needs_input", false), "◆");
+	assert.equal(stateGlyph("needs_input", false), "◇");
+});
+
+test("stateGlyph uses stronger variants for unread rows", () => {
+	assert.equal(stateGlyph("queued", false, false, true), "◎");
+	assert.equal(stateGlyph("working", true, false, true), "◉");
+	assert.equal(stateGlyph("needs_input", false, false, true), "◆");
+	assert.equal(stateGlyph("completed", false, false, true), "✔");
+	assert.equal(stateGlyph("idle", false, false, true), "•");
 });

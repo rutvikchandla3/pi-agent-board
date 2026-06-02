@@ -45,6 +45,7 @@ export function createRunStatus(config, pid, now) {
 		latestAssistantPreview: "",
 		question: null,
 		error: null,
+		lastAgentActivityAt: null,
 		stopReason: null,
 		stoppedByUser: false,
 		turns: 0,
@@ -72,6 +73,7 @@ export function reduceEvent(status, event, now) {
 			status.toolCount += 1;
 			status.semanticState = "working";
 			status.lastActivityAt = now;
+			status.lastAgentActivityAt = now;
 			meaningful = true;
 			break;
 		}
@@ -80,6 +82,7 @@ export function reduceEvent(status, event, now) {
 			status.currentTool = null;
 			status.semanticState = "working";
 			status.lastActivityAt = now;
+			status.lastAgentActivityAt = now;
 			meaningful = true;
 			break;
 		}
@@ -107,6 +110,7 @@ export function reduceEvent(status, event, now) {
 				}
 				status.semanticState = "working";
 				status.lastActivityAt = now;
+				status.lastAgentActivityAt = now;
 				meaningful = true;
 			}
 			break;
@@ -161,7 +165,7 @@ export function finalizeRun(status, opts, now) {
  * @param {number} now
  * @returns {import("./types.mjs").ViewState}
  */
-export function projectViewState(status, now) {
+export function projectViewState(status, now, previousState = null) {
 	return {
 		version: 1,
 		viewId: status.viewId,
@@ -177,5 +181,7 @@ export function projectViewState(status, now) {
 		latestTool: status.currentTool ? { name: status.currentTool.name, path: status.currentTool.path } : null,
 		question: status.question,
 		error: status.error,
+		lastVisitedAt: previousState?.lastVisitedAt ?? null,
+		lastAgentActivityAt: status.lastAgentActivityAt ?? previousState?.lastAgentActivityAt ?? null,
 	};
 }

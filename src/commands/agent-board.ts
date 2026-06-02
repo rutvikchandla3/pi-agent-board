@@ -126,6 +126,8 @@ async function dashboardAttachLoop(
 	let selectedId = initialSelectedId;
 	let again = true;
 	while (again) {
+		const currentId = currentViewId(ctx, service);
+		if (currentId) service.markVisited?.(currentId);
 		service.reconcile();
 		const result = await openDashboard(ctx, service, {
 			initialSelectedId: selectedId,
@@ -161,13 +163,17 @@ async function attach(
 
 	const target = service.attachTarget(viewId);
 	if (target.kind === "pty" && target.socketPath) {
+		service.markVisited?.(viewId);
 		const result = await openPtyAttach(ctx, root, row.meta.id, row.meta.name, target.socketPath);
+		service.markVisited?.(viewId);
 		return { action: result.action === "closed" ? "closed" : "detached" };
 	}
 
 	const ensured = service.ensureHost(viewId);
 	if (ensured.ok && ensured.socketPath) {
+		service.markVisited?.(viewId);
 		const result = await openPtyAttach(ctx, root, row.meta.id, row.meta.name, ensured.socketPath);
+		service.markVisited?.(viewId);
 		return { action: result.action === "closed" ? "closed" : "detached" };
 	}
 
@@ -177,6 +183,7 @@ async function attach(
 		return { action: "none" };
 	}
 	const name = latest.meta.name;
+	service.markVisited?.(viewId);
 	const switchingOverlay = await showSwitchingOverlay(ctx, name, ensured.fallbackReason ?? ensured.error ?? "PTY unavailable");
 	const result = await ctx.switchSession(latest.meta.sessionFile, {
 		withSession: async (replaced) => {
@@ -268,6 +275,7 @@ function installBackToDashboard(ctx: ExtensionCommandContext, service: ReturnTyp
 			try {
 				let selectedId = currentViewId(ctx, service);
 				while (true) {
+					if (selectedId) service.markVisited?.(selectedId);
 					service.reconcile();
 					const result = await openDashboard(ctx, service, { initialSelectedId: selectedId });
 					if (result.action !== "attach") return;
