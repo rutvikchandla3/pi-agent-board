@@ -1,0 +1,54 @@
+name: Owner approval policy
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  pull-requests: read
+  contents: read
+
+jobs:
+  owner-approval-policy:
+    name: Owner approval policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Allow owner PRs or require owner approval
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const pr = context.payload.pull_request;
+
+            if (!pr) {
+              core.info('No pull request payload; passing.');
+              return;
+            }
+
+            const author = pr.user.login;
+            if (author === owner) {
+              core.info(`PR author ${author} is repository owner ${owner}; approval not required.`);
+              return;
+            }
+
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+
+            const ownerApprovedHead = reviews.some((review) =>
+              review.user?.login === owner &&
+              review.state === 'APPROVED' &&
+              review.commit_id === pr.head.sha
+            );
+
+            if (!ownerApprovedHead) {
+              core.setFailed(`PRs from ${author} require approval from repository owner ${owner} on the latest head commit.`);
+              return;
+            }
+
+            core.info(`Repository owner ${owner} approved the latest head commit.`);
