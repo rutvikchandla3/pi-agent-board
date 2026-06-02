@@ -2,37 +2,70 @@ export function clampInt(value, min, max) {
 	return Math.max(min, Math.min(max, Math.floor(value)));
 }
 
-/**
- * Parse a terminal mouse report.
- * Supports standard SGR (`CSI < ...`), passive SGR (`CSI ? ...`), and X10 mouse encodings.
- */
-export function parseMouseEvent(data) {
-	const sgr = /^\x1b\[(<|\?)(\d+);(\d+);(\d+)([Mm])$/.exec(data);
+function parseMouseEventPrefix(data, offset = 0) {
+	const input = data.slice(offset);
+	const sgr = /^\x1b\[(<|\?)(\d+);(\d+);(\d+)([Mm])/.exec(input);
 	if (sgr) {
 		const button = Number(sgr[2]);
 		const col = Number(sgr[3]);
 		const row = Number(sgr[4]);
 		if (!Number.isFinite(button) || !Number.isFinite(col) || !Number.isFinite(row)) return null;
 		return {
-			encoding: sgr[1] === "?" ? "passive" : "sgr",
-			button,
-			col,
-			row,
-			action: sgr[5] === "m" ? "release" : button & 32 ? "move" : "press",
+			length: sgr[0].length,
+			raw: sgr[0],
+			mouse: {
+				encoding: sgr[1] === "?" ? "passive" : "sgr",
+				button,
+				col,
+				row,
+				action: sgr[5] === "m" ? "release" : button & 32 ? "move" : "press",
+			},
 		};
 	}
 
 	// X10/normal mouse: ESC [ M Cb Cx Cy. Cb is encoded as button + 32.
-	if (data.startsWith("\x1b[M") && data.length >= 6) {
+	if (input.startsWith("\x1b[M") && input.length >= 6) {
+		const button = input.charCodeAt(3) - 32;
 		return {
-			encoding: "x10",
-			button: data.charCodeAt(3) - 32,
-			col: data.charCodeAt(4) - 32,
-			row: data.charCodeAt(5) - 32,
-			action: (data.charCodeAt(3) - 32) & 32 ? "move" : "press",
+			length: 6,
+			raw: input.slice(0, 6),
+			mouse: {
+				encoding: "x10",
+				button,
+				col: input.charCodeAt(4) - 32,
+				row: input.charCodeAt(5) - 32,
+				action: button & 32 ? "move" : "press",
+			},
 		};
 	}
 	return null;
+}
+
+/**
+ * Parse a terminal mouse report.
+ * Supports standard SGR (`CSI < ...`), passive SGR (`CSI ? ...`), and X10 mouse encodings.
+ */
+export function parseMouseEvent(data) {
+	const parsed = parseMouseEventPrefix(data);
+	return parsed && parsed.length === data.length ? parsed.mouse : null;
+}
+
+/**
+ * Parse an input chunk that consists entirely of one or more concatenated mouse reports.
+ * Returns each decoded event with its exact raw byte sequence, or null if any non-mouse
+ * bytes are present in the chunk.
+ */
+export function parseMouseInputChunk(data) {
+	if (!data) return null;
+	const events = [];
+	let offset = 0;
+	while (offset < data.length) {
+		const parsed = parseMouseEventPrefix(data, offset);
+		if (!parsed) return null;
+		events.push(parsed);
+		offset += parsed.length;
+	}
+	return events;
 }
 
 /**
@@ -63,6 +96,22 @@ export function scrollViewportTop(viewportTop, bottom, linesUp) {
 		viewportTop: next >= safeBottom ? null : next,
 		changed: next !== current,
 	};
+}
+
+/**
+ * Decide whether drag-selecting at/just beyond the viewport edge should auto-scroll.
+ * Positive values scroll up into older output; negative values scroll down.
+ */
+export function selectionDragScrollLines(row, bodyHeight) {
+	const safeHeight = Math.max(1, Math.floor(bodyHeight));
+	const topRow = 2;
+	const bottomRow = topRow + safeHeight - 1;
+	const pointerRow = Math.floor(row);
+	if (pointerRow < topRow) return 2;
+	if (pointerRow === topRow) return 1;
+	if (pointerRow > bottomRow) return -2;
+	if (pointerRow === bottomRow) return -1;
+	return 0;
 }
 
 /**

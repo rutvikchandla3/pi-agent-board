@@ -1074,11 +1074,21 @@ export class DashboardComponent implements Component {
 			lines.push("");
 			lines.push(clip(this.listHints(), width));
 		} else if (this.mode === "filter") {
-			lines.push(clip(`${this.modeBadge("FILTER", "warning")} ${t.fg("warning", "filter› ")}${singleLineInput(this.input)}${cursor()}`, width));
+			lines.push(...this.renderEditorInputLines(width, {
+				prompt: `${this.modeBadge("FILTER", "warning")} ${t.fg("warning", "› ")}`,
+				continuation: t.fg("warning", "│ "),
+				editing: true,
+				placeholder: "",
+			}));
 			lines.push("");
 			lines.push(clip(this.hintLine("FILTER", "warning", ["enter apply", "esc clear"]), width));
 		} else if (this.mode === "rename") {
-			lines.push(clip(`${this.modeBadge("RENAME", "accent")} ${t.fg("accent", "rename› ")}${singleLineInput(this.input)}${cursor()}`, width));
+			lines.push(...this.renderEditorInputLines(width, {
+				prompt: `${this.modeBadge("RENAME", "accent")} ${t.fg("accent", "› ")}`,
+				continuation: t.fg("accent", "│ "),
+				editing: true,
+				placeholder: "",
+			}));
 			lines.push("");
 			lines.push(clip(this.hintLine("RENAME", "accent", ["enter save", "esc cancel"]), width));
 		} else if (this.mode === "confirm" && this.pending) {
@@ -1158,38 +1168,15 @@ export class DashboardComponent implements Component {
 		width: number,
 		opts: { prompt: string; continuation: string; editing: boolean; placeholder?: string; maxVisible?: number },
 	): string[] {
+		void opts.continuation;
+		void opts.maxVisible;
 		const text = this.input;
-		const lines = this.editor.getLines();
-		const cursorPos = this.editor.getCursor();
-		const maxVisible = opts.maxVisible ?? this.maxEditorVisibleLines();
-		const total = Math.max(1, lines.length);
-		const cursorLine = Math.max(0, Math.min(cursorPos.line, total - 1));
-		const start = Math.max(0, Math.min(cursorLine - maxVisible + 1, total - maxVisible));
-		const end = Math.min(total, start + maxVisible);
-		const out: string[] = [];
-
-		if (!text) {
+		if (!text && !opts.editing) {
 			const contentWidth = Math.max(1, width - visibleWidth(opts.prompt));
-			const rendered = opts.editing
-				? renderInputContent("", 0, contentWidth)
-				: this.theme.fg("muted", opts.placeholder ?? "");
-			return [clip(`${opts.prompt}${rendered}`, width)];
+			return [clip(`${opts.prompt}${clip(this.theme.fg("muted", opts.placeholder ?? ""), contentWidth)}`, width)];
 		}
-
-		if (start > 0) out.push(clip(`${opts.prompt}${this.theme.fg("dim", `↑ ${start} more`)}`, width));
-		for (let i = start; i < end; i++) {
-			const prefix = i === 0 && start === 0 ? opts.prompt : opts.continuation;
-			const contentWidth = Math.max(1, width - visibleWidth(prefix));
-			const cursorCol = opts.editing && i === cursorPos.line ? cursorPos.col : null;
-			out.push(clip(`${prefix}${renderInputContent(lines[i] ?? "", cursorCol, contentWidth)}`, width));
-		}
-		if (end < total) out.push(clip(`${opts.continuation}${this.theme.fg("dim", `↓ ${total - end} more`)}`, width));
-		return out;
-	}
-
-	private maxEditorVisibleLines(): number {
-		const rows = this.tui.terminal?.rows ?? 24;
-		return Math.max(1, Math.min(6, Math.floor(rows * 0.25)));
+		const rendered = this.editor.render(width);
+		return opts.editing ? rendered : rendered.map((line) => stripInactiveEditorCursor(line));
 	}
 
 	private renderRows(width: number): string[] {
@@ -1679,22 +1666,8 @@ function cursor(): string {
 	return "\x1b[7m \x1b[27m";
 }
 
-function renderInputContent(text: string, cursorCol: number | null, width: number): string {
-	const safeWidth = Math.max(1, width);
-	let start = 0;
-	if (cursorCol !== null && cursorCol >= safeWidth) start = cursorCol - safeWidth + 1;
-	const visibleText = text.slice(start);
-	if (cursorCol === null) return clip(visibleText, safeWidth);
-	return clip(withInlineCursor(visibleText, Math.max(0, cursorCol - start)), safeWidth);
-}
-
-function withInlineCursor(text: string, col: number): string {
-	const safeCol = Math.max(0, Math.min(col, text.length));
-	const before = text.slice(0, safeCol);
-	const after = text.slice(safeCol);
-	if (!after) return `${before}${cursor()}`;
-	const [first = ""] = [...after];
-	return `${before}\x1b[7m${first}\x1b[27m${after.slice(first.length)}`;
+function stripInactiveEditorCursor(line: string): string {
+	return line.replace(/\x1b\[7m([\s\S]*?)\x1b\[0m/, (_match, content: string) => (content === " " ? "" : content));
 }
 
 function singleLineInput(text: string): string {
