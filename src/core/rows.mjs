@@ -24,6 +24,7 @@ import { GROUP_LABELS, GROUP_ORDER, SEMANTIC_STATES } from "./types.mjs";
  * @property {boolean} needsInput
  * @property {boolean} hasError
  * @property {boolean} worktree
+ * @property {boolean} unread
  * @property {number} lastActivityAt
  */
 
@@ -37,24 +38,25 @@ export function rowState(row) {
  * @param {SemanticState} state
  * @param {boolean} alive
  * @param {boolean} [hostAlive]
+ * @param {boolean} [unread]
  * @returns {string}
  */
-export function stateGlyph(state, alive, hostAlive = false) {
+export function stateGlyph(state, alive, hostAlive = false, unread = false) {
 	switch (state) {
 		case "needs_input":
-			return "◆";
+			return unread ? "◆" : "◇";
 		case "working":
-			return alive ? "●" : "◐";
+			return alive ? (unread ? "◉" : "●") : (unread ? "◕" : "◐");
 		case "queued":
-			return hostAlive ? "◌" : "○";
+			return hostAlive ? (unread ? "◍" : "◌") : (unread ? "◎" : "○");
 		case "completed":
-			return hostAlive ? "◌" : "✓";
+			return hostAlive ? (unread ? "◍" : "◌") : (unread ? "✔" : "✓");
 		case "failed":
-			return "✗";
+			return unread ? "✖" : "✗";
 		case "idle":
-			return "·";
+			return unread ? "•" : "·";
 		case "stopped":
-			return "■";
+			return unread ? "■" : "▪";
 		default:
 			return "?";
 	}
@@ -97,6 +99,8 @@ export function rowView(row, now) {
 	const lastActivityAt = row.state?.lastActivityAt ?? row.meta.updatedAt ?? row.meta.createdAt;
 	const worktree = row.meta.worktreeMode === "worktree";
 	const place = baseName(row.meta.repoCwd || row.meta.cwd) + (worktree ? "⌥" : "");
+	const lastVisitedAt = row.state?.lastVisitedAt ?? null;
+	const lastAgentActivityAt = row.state?.lastAgentActivityAt ?? null;
 	return {
 		id: row.meta.id,
 		name: row.meta.name,
@@ -110,6 +114,7 @@ export function rowView(row, now) {
 		needsInput: state === "needs_input",
 		hasError: state === "failed",
 		worktree,
+		unread: lastAgentActivityAt !== null && (lastVisitedAt === null || lastAgentActivityAt > lastVisitedAt),
 		lastActivityAt,
 	};
 }

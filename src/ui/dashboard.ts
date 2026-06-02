@@ -49,12 +49,15 @@ type LaunchModel = {
 type LaunchChoice = { model: LaunchModel; thinkingLevel?: ThinkingLevel };
 type LaunchPicker = "cwd" | "model" | "thinking" | null;
 
-type Mode = "list" | "dispatch" | "filter" | "peek" | "reply" | "rename" | "confirm" | "help" | "session" | "launch";
+type Mode = "list" | "select" | "dispatch" | "filter" | "peek" | "reply" | "rename" | "confirm" | "help" | "session" | "launch";
 
 interface PendingConfirm {
 	prompt: string;
 	onYes: () => void;
+	returnMode?: Mode;
 }
+
+type ReturnableMode = Exclude<Mode, "help">;
 
 type InputNoticeColor = "accent" | "success" | "warning" | "muted" | "dim";
 type FlashLevel = "info" | "warn" | "error";
@@ -97,10 +100,12 @@ export class DashboardComponent implements Component {
 	private rows: Row[] = [];
 	private orderedIds: string[] = [];
 	private selectedId: string | null = null;
+	private selectedIds = new Set<string>();
 	private input = "";
 	private filterQuery = "";
 	private worktreeNext = false;
 	private pending: PendingConfirm | null = null;
+	private helpReturnMode: ReturnableMode = "list";
 	private peekId: string | null = null;
 	private scrollTop = 0;
 	private sessionScrollTop = 0;
@@ -145,8 +150,11 @@ export class DashboardComponent implements Component {
 		this.rows = this.filterQuery ? filterRows(all, this.filterQuery) : all;
 		const groups = groupRows(this.rows, Date.now());
 		this.orderedIds = groups.flatMap((g) => g.rows.map((r) => r.id));
+		const visibleIds = new Set(this.orderedIds);
+		this.selectedIds = new Set([...this.selectedIds].filter((id) => visibleIds.has(id)));
 		if (this.orderedIds.length === 0) {
 			this.selectedId = null;
+			if (this.mode === "select") this.mode = "list";
 		} else if (!this.selectedId || !this.orderedIds.includes(this.selectedId)) {
 			this.selectedId = this.orderedIds[0];
 		}
@@ -156,6 +164,54 @@ export class DashboardComponent implements Component {
 	private selectedRow(): Row | null {
 		const id = this.mode === "peek" || this.mode === "reply" ? this.peekId : this.selectedId;
 		return id ? (this.rows.find((r) => r.meta.id === id) ?? this.deps.service.row(id)) : null;
+	}
+
+	private selectionCount(): number {
+		return this.selectedIds.size;
+	}
+
+	private unreadCount(): number {
+		return this.rows.filter((row) => {
+			const lastVisitedAt = row.state?.lastVisitedAt ?? null;
+			const lastAgentActivityAt = row.state?.lastAgentActivityAt ?? null;
+			return lastAgentActivityAt !== null && (lastVisitedAt === null || lastAgentActivityAt > lastVisitedAt);
+		}).length;
+	}
+
+	private isSelectedForBatch(viewId: string): boolean {
+		return this.selectedIds.has(viewId);
+	}
+
+	private startSelectionMode(): void {
+		if (!this.selectedId) return;
+		this.mode = "select";
+		this.selectedIds.clear();
+		this.notifyInputState("SELECT mode — 0 selected", "accent");
+	}
+
+	private openHelp(returnMode: ReturnableMode): void {
+		this.helpReturnMode = returnMode;
+		this.mode = "help";
+	}
+
+	private exitSelectionMode(clear = true): void {
+		if (clear) this.selectedIds.clear();
+		this.mode = "list";
+		this.notifyInputState("NORMAL mode", "muted");
+	}
+
+	private toggleSelectedCurrent(): void {
+		if (!this.selectedId) return;
+		if (this.selectedIds.has(this.selectedId)) this.selectedIds.delete(this.selectedId);
+		else this.selectedIds.add(this.selectedId);
+	}
+
+	private selectAllVisible(): void {
+		this.selectedIds = new Set(this.orderedIds);
+	}
+
+	private selectedBatchRows(): Row[] {
+		return [...this.selectedIds].map((id) => this.deps.service.row(id)).filter((row): row is Row => Boolean(row));
 	}
 
 	private moveSelection(delta: number): void {
@@ -197,6 +253,9 @@ export class DashboardComponent implements Component {
 			case "list":
 				this.handleListKey(data);
 				break;
+			case "select":
+				this.handleSelectKey(data);
+				break;
 			case "dispatch":
 				this.handleTextMode(data, () => this.openLaunchDialog(), () => this.leaveDispatchMode(), { tabToggle: true });
 				break;
@@ -222,7 +281,7 @@ export class DashboardComponent implements Component {
 				this.handleConfirmKey(data);
 				break;
 			case "help":
-				this.mode = "list";
+				this.mode = this.helpReturnMode;
 				break;
 		}
 		this.requestFullRender();
@@ -250,8 +309,9 @@ export class DashboardComponent implements Component {
 			return;
 		}
 		if (matchesKey(data, Key.space)) return this.openPeek();
+		if (data === "m") return this.startSelectionMode();
 		if (data === "/") return this.startFilter();
-		if (data === "?") return void (this.mode = "help");
+		if (data === "?") return this.openHelp("list");
 		if (data === "i") return this.startDispatch();
 		if (matchesKey(data, Key.ctrl("r"))) return this.startRename();
 		if (matchesKey(data, Key.ctrl("t"))) return this.togglePin();
@@ -270,6 +330,32 @@ export class DashboardComponent implements Component {
 			this.notifyInputState("Press i to enter INSERT mode, then type or paste", "accent");
 			return;
 		}
+	}
+
+	private handleSelectKey(data: string): void {
+		if (matchesKey(data, Key.up)) return void this.moveSelection(-1);
+		if (matchesKey(data, Key.down)) return void this.moveSelection(1);
+		if (matchesKey(data, Key.space)) {
+			this.toggleSelectedCurrent();
+			return;
+		}
+		if (data === "a") {
+			this.selectAllVisible();
+			this.notifyInputState(`SELECT mode — ${this.selectionCount()} selected`, "accent");
+			return;
+		}
+		if (data === "d") return this.confirmDoneSelection();
+		if (matchesKey(data, Key.ctrl("x"))) return this.confirmDeleteSelection();
+		if (data === "u") {
+			this.selectedIds.clear();
+			this.notifyInputState("SELECT mode — selection cleared", "accent");
+			return;
+		}
+		if (data === "m" || matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+			this.exitSelectionMode(true);
+			return;
+		}
+		if (data === "?") return this.openHelp("select");
 	}
 
 	private handlePeekKey(data: string): void {
@@ -293,6 +379,8 @@ export class DashboardComponent implements Component {
 		const termRows = this.tui.terminal?.rows ?? 24;
 		const page = Math.max(1, termRows - 8);
 		if (matchesKey(data, Key.left) || matchesKey(data, Key.escape) || data === "<") {
+			const row = this.selectedRow();
+			if (row) this.deps.service.markVisited?.(row.meta.id);
 			this.mode = "list";
 			return;
 		}
@@ -324,8 +412,9 @@ export class DashboardComponent implements Component {
 	private handleConfirmKey(data: string): void {
 		if (data === "y" || data === "Y" || matchesKey(data, Key.enter)) {
 			const action = this.pending?.onYes;
+			const returnMode = this.pending?.returnMode ?? "list";
 			this.pending = null;
-			this.mode = "list";
+			this.mode = returnMode;
 			try {
 				action?.();
 			} catch (err) {
@@ -334,8 +423,9 @@ export class DashboardComponent implements Component {
 			return;
 		}
 		// any other key cancels
+		const returnMode = this.pending?.returnMode ?? "list";
 		this.pending = null;
-		this.mode = "list";
+		this.mode = returnMode;
 	}
 
 	private handleLaunchKey(data: string): void {
@@ -735,6 +825,28 @@ export class DashboardComponent implements Component {
 		this.mode = "confirm";
 	}
 
+	private confirmDoneSelection(): void {
+		const rows = this.selectedBatchRows();
+		if (rows.length === 0) return this.notice("Select one or more sessions first", "warn");
+		const doneIds = rows.filter((row) => !isAgentBusy(row) && row.state?.semanticState !== "completed").map((row) => row.meta.id);
+		const skipped = rows.length - doneIds.length;
+		if (doneIds.length === 0) return this.notice("No inactive sessions in the selection can be moved to Done", "warn");
+		this.pending = {
+			prompt: `Mark ${doneIds.length} selected session${doneIds.length === 1 ? "" : "s"} as done?${skipped ? ` ${skipped} will be skipped.` : ""} (y/N)`,
+			returnMode: "select",
+			onYes: () => {
+				const res = this.deps.service.markCompletedMany?.(doneIds) ?? { ok: true, completed: 0, skipped: doneIds.length, completedIds: [] };
+				if (!res.ok) this.notice("Mark done failed", "error");
+				else {
+					if (res.completedIds?.length) this.selectedId = res.completedIds[0];
+					this.notice(`Moved ${res.completed} to Done${res.skipped ? ` · skipped ${res.skipped}` : ""}`, "info");
+				}
+				this.refresh();
+			},
+		};
+		this.mode = "confirm";
+	}
+
 	private markCompleted(row: Row): { ok: boolean; error?: string } {
 		const service = this.deps.service as Service & { markCompleted?: (viewId: string) => { ok: boolean; error?: string } };
 		if (typeof service.markCompleted === "function") return service.markCompleted(row.meta.id);
@@ -756,6 +868,8 @@ export class DashboardComponent implements Component {
 			latestTool: null,
 			question: null,
 			error: null,
+			lastVisitedAt: null,
+			lastAgentActivityAt: null,
 		};
 		state.semanticState = "completed";
 		state.processState = "exited";
@@ -807,6 +921,25 @@ export class DashboardComponent implements Component {
 		this.mode = "confirm";
 	}
 
+	private confirmDeleteSelection(): void {
+		const rows = this.selectedBatchRows();
+		if (rows.length === 0) return this.notice("Select one or more Done sessions first", "warn");
+		if (rows.some((row) => rowState(row) !== "completed")) return this.notice("Only Done sessions can be batch deleted", "warn");
+		const worktrees = rows.filter((row) => row.meta.worktreeMode === "worktree" && !!row.meta.worktreePath).length;
+		this.pending = {
+			prompt: `Delete ${rows.length} done session${rows.length === 1 ? "" : "s"}? Session files are preserved.${worktrees ? ` ${worktrees} worktree${worktrees === 1 ? "" : "s"} will be removed.` : ""} (y/N)`,
+			returnMode: "select",
+			onYes: () => {
+				const res = this.deps.service.archiveMany?.(rows.map((row) => row.meta.id)) ?? { ok: true, archived: 0, skipped: rows.length };
+				if (!res.ok) this.notice("Delete failed", "error");
+				else this.notice(`Deleted ${res.archived}${res.skipped ? ` · skipped ${res.skipped}` : ""}`, "info");
+				this.exitSelectionMode(true);
+				this.refresh();
+			},
+		};
+		this.mode = "confirm";
+	}
+
 	private openPeek(): void {
 		if (!this.selectedId) return;
 		this.peekId = this.selectedId;
@@ -822,6 +955,7 @@ export class DashboardComponent implements Component {
 
 	private openSessionView(): void {
 		if (!this.selectedId) return;
+		this.deps.service.markVisited?.(this.selectedId);
 		this.sessionScrollTop = 0;
 		this.mode = "session";
 	}
@@ -876,13 +1010,18 @@ export class DashboardComponent implements Component {
 		const needs = allRows.filter((r) => r.state?.semanticState === "needs_input").length;
 		const working = allRows.filter((r) => r.state?.semanticState === "working").length;
 		const completed = allRows.filter((r) => r.state?.semanticState === "completed").length;
+		const unread = allRows.filter((r) => {
+			const lastVisitedAt = r.state?.lastVisitedAt ?? null;
+			const lastAgentActivityAt = r.state?.lastAgentActivityAt ?? null;
+			return lastAgentActivityAt !== null && (lastVisitedAt === null || lastAgentActivityAt > lastVisitedAt);
+		}).length;
 		const lines: string[] = [];
 		const focus = this.selectedRow() ?? allRows[0] ?? null;
 
-		lines.push(...this.renderOverview(width, focus, { needs, working, completed }));
+		lines.push(...this.renderOverview(width, focus, { needs, working, completed, unread }));
 		if (this.flash) lines.push(...renderFlashBanner(this.flash, width, { bottomGap: true }));
 
-		if (this.mode === "help") return this.fitToHeight(lines.concat(this.renderHelp(width)), width);
+		if (this.mode === "help") return this.fitToHeight(this.renderHelp(width), width);
 		if (this.mode === "peek" || this.mode === "reply") return this.fitToHeight(lines.concat(this.renderPeek(width)), width);
 		if (this.mode === "session") return this.fitToHeight(lines.concat(this.renderSession(width)), width);
 		if (this.mode === "launch") return this.fitToHeight(lines.concat(this.renderLaunch(width)), width);
@@ -913,16 +1052,24 @@ export class DashboardComponent implements Component {
 	private renderOverview(
 		width: number,
 		row: Row | null,
-		counts: { needs: number; working: number; completed: number },
+		counts: { needs: number; working: number; completed: number; unread: number },
 	): string[] {
-		return renderAgentboardHeader(width, this.theme, row, counts, this.filterQuery, this.deps.defaultCwd);
+		return renderAgentboardHeader(
+			width,
+			this.theme,
+			row,
+			counts,
+			this.filterQuery,
+			this.deps.defaultCwd,
+			this.mode === "select" ? this.selectionCount() : 0,
+		);
 	}
 
 	private renderFooter(width: number): string[] {
 		const t = this.theme;
 		const modeColor = this.modeColor();
 		const lines = [t.fg(modeColor, "─".repeat(width))];
-		if (this.mode === "list" || this.mode === "dispatch") {
+		if (this.mode === "list" || this.mode === "dispatch" || this.mode === "select") {
 			lines.push(...this.taskInputLines(width));
 			lines.push("");
 			lines.push(clip(this.listHints(), width));
@@ -948,13 +1095,26 @@ export class DashboardComponent implements Component {
 	private listHints(): string {
 		const selected = this.selectedRow();
 		const live = selected ? selected.hostAlive && isAgentBusy(selected) : false;
+		const unread = this.unreadCount();
 		if (this.mode === "dispatch") {
 			const hints = ["esc normal", "enter launch", "shift+enter newline", "←/→ edit", "ctrl/alt+←/→ word"];
 			if (this.input.trim() || this.worktreeNext) hints.splice(2, 0, `tab worktree:${this.worktreeNext ? "on" : "off"}`);
 			return this.hintLine("INSERT", "success", hints);
 		}
+		if (this.mode === "select") {
+			return this.hintLine("SELECT", "accent", [
+				`${this.selectionCount()} selected`,
+				...(unread > 0 ? [`•${unread} unread`] : []),
+				"space toggle",
+				"a all visible",
+				"u clear",
+				"d move done",
+				"ctrl+x delete done",
+				"esc cancel",
+			]);
+		}
 		const primary = this.input.trim() ? "enter launch" : live ? "enter attach live" : "enter resume";
-		const hints = ["i insert", primary, "→ attach", "d done", "space peek", "v transcript", "ctrl+r rename", "ctrl+x delete", "X delete state", "/ filter", "? help"];
+		const hints = ["i insert", primary, "→ attach", "m multi-select", ...(unread > 0 ? [`•${unread} unread`] : []), "d done", "space peek", "v transcript", "ctrl+r rename", "ctrl+x delete", "X delete state", "/ filter", "? help"];
 		if (this.input.trim()) hints.splice(1, 0, "esc clear");
 		if (this.input.trim() || this.worktreeNext) hints.splice(this.input.trim() ? 3 : 2, 0, `tab worktree:${this.worktreeNext ? "on" : "off"}`);
 		return this.hintLine("NORMAL", "muted", hints);
@@ -977,6 +1137,7 @@ export class DashboardComponent implements Component {
 			case "confirm":
 				return "warning";
 			case "rename":
+			case "select":
 				return "accent";
 			default:
 				return "dim";
@@ -1053,14 +1214,15 @@ export class DashboardComponent implements Component {
 	private renderRow(rv: ReturnType<typeof import("../core/rows.mjs")["rowView"]>, width: number): string {
 		const t = this.theme;
 		const selected = rv.id === this.selectedId;
-		const marker = stageFg(rv.state, selected ? "›" : stateGlyph(rv.state, rv.alive, rv.hostAlive));
-		const badge = `${rv.pinned ? "★ " : ""}${rv.worktree ? "⌥ " : ""}`;
+		const glyph = stateGlyph(rv.state, rv.alive, rv.hostAlive, rv.unread);
+		const marker = stageFg(rv.state, selected ? `›${glyph}` : ` ${glyph}`);
+		const badge = `${this.mode === "select" ? `${this.isSelectedForBatch(rv.id) ? "◉" : "○"} ` : ""}${rv.pinned ? "★ " : ""}${rv.worktree ? "⌥ " : ""}`;
 		const ageRaw = ` ${rv.age}`;
 		const nameW = clamp(Math.floor(width * 0.34), 18, 30);
 		const folderW = width >= 72 ? clamp(Math.floor(width * 0.16), 10, 22) : width >= 56 ? 10 : 0;
 		const availableName = Math.max(8, nameW - visibleWidth(badge));
-		const nameText = `${badge}${truncate(rv.name, availableName)}`.padEnd(nameW);
-		const folderText = folderW > 0 ? truncate(rv.place, folderW).padEnd(folderW) : "";
+		const nameText = padTo(`${badge}${truncate(rv.name, availableName)}`, nameW);
+		const folderText = folderW > 0 ? padTo(truncate(rv.place, folderW), folderW) : "";
 		const folder = folderW > 0 ? ` ${t.fg("dim", folderText)}` : "";
 		const summaryW = Math.max(8, width - nameW - visibleWidth(folder) - visibleWidth(ageRaw) - 4);
 		const summary = truncate(rv.summary, summaryW);
@@ -1238,6 +1400,7 @@ export class DashboardComponent implements Component {
 			["normal", "Dashboard owns keys; i enters insert mode"],
 			["insert", "Editor owns text keys; / is literal, arrows move cursor"],
 			["i", "Enter insert/compose mode; then / is literal for slash commands"],
+			["m", "Enter multi-select mode from the board list"],
 			["enter", "Normal/insert with draft: open start-session dialog; empty: attach/resume"],
 			["shift+enter", "Insert a newline while in insert/reply"],
 			["esc", "Insert → normal; Normal with draft clears; empty quits standalone dashboard"],
@@ -1245,20 +1408,21 @@ export class DashboardComponent implements Component {
 			["ctrl/alt+←/→", "Jump by word in insert mode"],
 			["→ or >", "Attach to the selected real Pi session"],
 			["d", "Confirm and mark selected inactive session done"],
-			["space", "Peek when input is empty"],
+			["space", "Peek when input is empty; in multi-select: toggle current row"],
 			["tab", "Toggle worktree for the next dispatch"],
 			["/", "Filter in normal mode; use i then / for slash commands"],
 			["ctrl+r/t/s/x", "Rename · pin · stop · delete selected"],
 			["X", "Delete all inactive sessions in selected state"],
 			["v", "Open read-only transcript view"],
+			["In select", "a select all visible · u clear · d move done · ctrl+x delete done · esc cancel"],
 			["In peek", "→ attach · v transcript · r reply · ↑↓ adjacent"],
 			["In session", "← back · ↑↓ scroll · enter attach · r reply"],
 		];
-		const out = [t.fg("accent", t.bold("  Keys"))];
-		for (const [k, v] of rows) out.push(clip(`  ${t.fg("accent", k.padEnd(14))} ${t.fg("muted", v)}`, width));
-		out.push("");
-		out.push(clip(t.fg("dim", "  press any key to return"), width));
-		return out;
+		const dialog = [t.fg("accent", t.bold("Hotkeys / keybindings")), ""];
+		for (const [k, v] of rows) dialog.push(`  ${t.fg("accent", k.padEnd(14))} ${t.fg("muted", v)}`);
+		dialog.push("");
+		dialog.push(t.fg("dim", `  press any key to return to ${this.helpReturnMode}`));
+		return renderCenteredBox(dialog, width, this.tui.terminal?.rows ?? 24, t);
 	}
 
 	/** Keep the selected row visible within `capacity` lines, with scroll markers. */
@@ -1371,7 +1535,7 @@ const HEADER_TOP_PADDING = 1;
 const HEADER_BOTTOM_PADDING = 2;
 const AGENTBOARD_HEADER_MIN_WIDTH = HEADER_LEFT_PADDING + PI_ICON_WIDTH + HEADER_TEXT_GAP + 24;
 
-type HeaderCounts = { needs: number; working: number; completed: number };
+type HeaderCounts = { needs: number; working: number; completed: number; unread: number };
 
 function renderAgentboardHeader(
 	width: number,
@@ -1380,6 +1544,7 @@ function renderAgentboardHeader(
 	counts: HeaderCounts,
 	filterQuery: string,
 	defaultCwd: string,
+	selectionCount = 0,
 ): string[] {
 	if (width < AGENTBOARD_HEADER_MIN_WIDTH) {
 		const raw = [
@@ -1391,7 +1556,7 @@ function renderAgentboardHeader(
 		return raw.map((line, i) => headerBgLine(line, width, i));
 	}
 
-	const textRows = headerTextRows(theme, row, counts, filterQuery, defaultCwd);
+	const textRows = headerTextRows(theme, row, counts, filterQuery, defaultCwd, selectionCount);
 	const textStart = Math.max(0, Math.round((PI_ICON.length - textRows.length) / 2));
 	const raw = blankLines(HEADER_TOP_PADDING);
 	raw.push(
@@ -1403,7 +1568,14 @@ function renderAgentboardHeader(
 	return raw.map((line, i) => headerBgLine(line, width, i));
 }
 
-function headerTextRows(theme: ThemeLike, row: Row | null, counts: HeaderCounts, filterQuery: string, defaultCwd: string): string[] {
+function headerTextRows(
+	theme: ThemeLike,
+	row: Row | null,
+	counts: HeaderCounts,
+	filterQuery: string,
+	defaultCwd: string,
+	selectionCount: number,
+): string[] {
 	const title = `${ansiFg(248, 250, 252, theme.bold("AgentBoard"))} ${ansiFg(148, 163, 184, AGENTBOARD_VERSION)}`;
 	const contextBits: string[] = [];
 	let contextPrefix = ansiFg(148, 163, 184, "Background Pi sessions");
@@ -1419,6 +1591,7 @@ function headerTextRows(theme: ThemeLike, row: Row | null, counts: HeaderCounts,
 	}
 	const path = displayPath(row ? row.meta.repoCwd || row.meta.cwd : defaultCwd);
 	contextBits.push(path);
+	if (selectionCount > 0) contextBits.push(`${selectionCount} selected`);
 	return [
 		title,
 		`${contextPrefix} ${ansiFg(100, 116, 139, contextBits.join(" · "))}`,
@@ -1431,10 +1604,15 @@ function headerStageSummary(theme: ThemeLike, counts: HeaderCounts, filterQuery:
 	const parts = [
 		headerStagePart(theme, "needs_input", counts.needs, compact ? "awaiting" : "awaiting input"),
 		headerStagePart(theme, "working", counts.working, "running"),
+		headerUnreadPart(theme, counts.unread),
 		headerStagePart(theme, "completed", counts.completed, "done"),
 	];
 	if (filterQuery) parts.push(theme.fg("warning", `filter:${filterQuery}`));
 	return parts.join(joiner);
+}
+
+function headerUnreadPart(theme: ThemeLike, count: number): string {
+	return `${theme.fg(count > 0 ? "accent" : "dim", `•${count}`)} ${theme.fg("dim", "unread")}`;
 }
 
 function headerStagePart(theme: ThemeLike, state: keyof typeof GROUP_LABELS, count: number, label: string): string {

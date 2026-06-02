@@ -251,3 +251,75 @@ test("markCompleted explicitly moves an inactive session to completed", () => {
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+
+test("markVisited records a durable lastVisitedAt timestamp", () => {
+	const root = freshRoot();
+	try {
+		createView(root, { id: "v1", name: "a", cwd: "/r" });
+		const before = readState(root, "v1");
+		assert.equal(before.lastVisitedAt, null);
+		assert.deepEqual(service(root).markVisited("v1"), { ok: true });
+		const after = readState(root, "v1");
+		assert.equal(typeof after.lastVisitedAt, "number");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+
+test("markCompletedMany completes inactive rows and skips live/already-done rows", () => {
+	const root = freshRoot();
+	try {
+		createView(root, { id: "idle1", name: "idle1", cwd: "/r" });
+		createView(root, { id: "done1", name: "done1", cwd: "/r" });
+		createView(root, { id: "live1", name: "live1", cwd: "/r" });
+		const idle = readState(root, "idle1");
+		idle.semanticState = "idle";
+		idle.processState = "exited";
+		writeState(root, idle);
+		const done = readState(root, "done1");
+		done.semanticState = "completed";
+		done.processState = "exited";
+		writeState(root, done);
+		const live = readState(root, "live1");
+		live.semanticState = "working";
+		live.processState = "alive";
+		writeState(root, live);
+
+		assert.deepEqual(service(root).markCompletedMany(["idle1", "done1", "live1"]), {
+			ok: true,
+			completed: 1,
+			skipped: 2,
+			completedIds: ["idle1"],
+		});
+		assert.equal(readState(root, "idle1").semanticState, "completed");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+
+test("archiveMany archives explicit completed rows and skips live ones", () => {
+	const root = freshRoot();
+	try {
+		createView(root, { id: "done1", name: "done1", cwd: "/r" });
+		createView(root, { id: "done2", name: "done2", cwd: "/r" });
+		createView(root, { id: "live1", name: "live1", cwd: "/r" });
+		for (const id of ["done1", "done2"]) {
+			const s = readState(root, id);
+			s.semanticState = "completed";
+			s.processState = "exited";
+			writeState(root, s);
+		}
+		const live = readState(root, "live1");
+		live.semanticState = "working";
+		live.processState = "alive";
+		writeState(root, live);
+
+		assert.deepEqual(service(root).archiveMany(["done1", "done2", "live1"]), { ok: true, archived: 2, skipped: 1 });
+		assert.deepEqual(service(root).rows().map((r) => r.meta.id), ["live1"]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});

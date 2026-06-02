@@ -84,6 +84,8 @@ export const GROUP_LABELS = {
  * @property {{name:string, path:string|null}|null} latestTool
  * @property {string|null} question
  * @property {string|null} error
+ * @property {number|null} lastVisitedAt
+ * @property {number|null} lastAgentActivityAt
  */
 
 /**
@@ -128,6 +130,7 @@ export const GROUP_LABELS = {
  * @property {string} latestAssistantPreview
  * @property {string|null} question
  * @property {string|null} error
+ * @property {number|null} lastAgentActivityAt
  * @property {string|null} stopReason
  * @property {boolean} stoppedByUser
  * @property {number} turns

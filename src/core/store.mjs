@@ -262,6 +262,8 @@ export function createView(root, opts) {
 		latestTool: null,
 		question: null,
 		error: null,
+		lastVisitedAt: null,
+		lastAgentActivityAt: null,
 	};
 	writeState(root, state);
 	addToRoster(root, meta.id);

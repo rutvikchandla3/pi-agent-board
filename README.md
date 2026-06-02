@@ -51,7 +51,8 @@ pi
 - **Peek** (`space`) a row for its summary, blocker/question, and latest output; **reply** (`r`) inline without attaching.
 - **Attach** (`enter` or `→` / `>`) to continue the full interactive Pi session (confirms + interrupts if it's still running). The live PTY surface supports clickable links plus drag/double-click copy; detach with `←`, `ctrl+]`, or `ctrl+g`.
 - **Transcript view** (`v`) opens a full-screen read-only live transcript without interrupting it; **back** with (`←` / `<`).
-- **Manage:** rename (`ctrl+r`), pin (`ctrl+t`), stop (`ctrl+s`), mark done (`d`), delete selected (`ctrl+x`, archives row & keeps the session), delete all inactive rows in the selected state (`X`), filter (`/`, supports `s:<state>` + free text), help (`?`).
+- **Manage:** rename (`ctrl+r`), pin (`ctrl+t`), stop (`ctrl+s`), mark done (`d`), multi-select (`m` → `space` toggle / `a` all visible / `u` clear / `d` move done / `ctrl+x` delete selected done batch), delete selected (`ctrl+x`, archives row & keeps the session), delete all inactive rows in the selected state (`X`), filter (`/`, supports `s:<state>` + free text), help (`?`, opens a hotkeys dialog).
+- **Read hints:** unread sessions use a stronger version of each stage icon instead of an extra dot, and the header/footer surface the unread count for quick scanning.
 - **Durable & resumable:** survives `/reload` and pi restart; reconciles runs whose monitor died.
 - **Safe parallelism:** same-repo parallel writers are auto-isolated into git worktrees.
 

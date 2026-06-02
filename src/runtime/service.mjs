@@ -125,6 +125,71 @@ export function createService(opts) {
 		writeState(root, state);
 	}
 
+	/** @param {string} viewId @returns {{ ok: boolean, error?: string }} */
+	function markVisited(viewId) {
+		const row = loadRow(root, viewId);
+		if (!row) return { ok: false, error: "Unknown session" };
+		const state = readState(root, viewId) ?? row.state ?? blankState(viewId);
+		state.lastVisitedAt = Date.now();
+		state.updatedAt = Date.now();
+		writeState(root, state);
+		return { ok: true };
+	}
+
+	/** @param {string} viewId @returns {{ ok: boolean, error?: string }} */
+	function completeView(viewId) {
+		const row = loadRow(root, viewId);
+		if (!row) return { ok: false, error: "Unknown session" };
+		if (isAgentBusy(row)) return { ok: false, error: "Wait for the active run to finish before marking done" };
+		const state = readState(root, viewId) ?? row.state ?? blankState(viewId);
+		state.semanticState = "completed";
+		state.processState = "exited";
+		state.needsInput = false;
+		state.hasError = false;
+		state.question = null;
+		state.error = null;
+		state.summary = completionSummary(state);
+		state.lastActivityAt = Date.now();
+		state.updatedAt = Date.now();
+		writeState(root, state);
+		return { ok: true };
+	}
+
+	/**
+	 * @param {string} viewId
+	 * @param {{ removeWorktree?: boolean }} [archiveOpts]
+	 * @returns {{ ok: boolean, error?: string }}
+	 */
+	function archiveView(viewId, archiveOpts = {}) {
+		const row = loadRow(root, viewId);
+		if (!row) return { ok: false, error: "Unknown session" };
+		if (row.hostAlive) sendHostMessage(row, { type: "terminate" });
+		if (row.alive && row.state?.currentRunId) {
+			const pid = readPid(root, viewId, row.state.currentRunId);
+			if (pid) killProcess(pid);
+		}
+		if (isAgentBusy(row)) {
+			const state = readState(root, viewId) ?? row.state ?? blankState(viewId);
+			state.semanticState = "stopped";
+			state.processState = "exited";
+			state.needsInput = false;
+			state.hasError = false;
+			state.question = null;
+			state.summary = "Stopped";
+			state.lastActivityAt = Date.now();
+			state.updatedAt = Date.now();
+			writeState(root, state);
+		}
+		if (archiveOpts.removeWorktree && row.meta.worktreeMode === "worktree" && row.meta.worktreePath && row.meta.repoRoot) {
+			removeWorktree(row.meta.repoRoot, row.meta.worktreePath);
+			row.meta.worktreePath = null;
+			row.meta.worktreeMode = "off";
+		}
+		row.meta.archived = true;
+		writeMeta(root, row.meta);
+		return { ok: true };
+	}
+
 	/** @param {string} viewId @returns {import("../core/types.mjs").ViewState} */
 	function blankState(viewId) {
 		return {
@@ -142,6 +207,8 @@ export function createService(opts) {
 			latestTool: null,
 			question: null,
 			error: null,
+			lastVisitedAt: null,
+			lastAgentActivityAt: null,
 		};
 	}
 
@@ -188,6 +255,7 @@ export function createService(opts) {
 			latestAssistantPreview: s.latestAssistantPreview,
 			question: s.question,
 			error: s.error,
+			lastAgentActivityAt: s.lastAgentActivityAt ?? null,
 			stopReason: null,
 			stoppedByUser: false,
 			turns: 0,
@@ -200,7 +268,7 @@ export function createService(opts) {
 	 * @param {import("../core/types.mjs").RunStatus} status
 	 */
 	function writeForegroundState(row, status) {
-		const projected = projectViewState(status, Date.now());
+		const projected = projectViewState(status, Date.now(), readState(root, row.meta.id) ?? row.state ?? null);
 		// Foreground turns are driven by the interactive Pi process, not a detached
 		// runner, so keep currentRunId null. This prevents reconcile()/stop() from
 		// treating a foreground turn as a managed background runner pid.
@@ -459,6 +527,11 @@ export function createService(opts) {
 			return { ok: true };
 		},
 
+		/** @param {string} viewId @returns {{ ok: boolean, error?: string }} */
+		markVisited(viewId) {
+			return markVisited(viewId);
+		},
+
 		/**
 		 * Explicitly mark an inactive session as done. Successful runs settle as
 		 * `idle` until the user reviews and confirms this action from the dashboard.
@@ -466,21 +539,32 @@ export function createService(opts) {
 		 * @returns {{ ok: boolean, error?: string }}
 		 */
 		markCompleted(viewId) {
-			const row = loadRow(root, viewId);
-			if (!row) return { ok: false, error: "Unknown session" };
-			if (isAgentBusy(row)) return { ok: false, error: "Wait for the active run to finish before marking done" };
-			const state = row.state ?? blankState(viewId);
-			state.semanticState = "completed";
-			state.processState = "exited";
-			state.needsInput = false;
-			state.hasError = false;
-			state.question = null;
-			state.error = null;
-			state.summary = completionSummary(state);
-			state.lastActivityAt = Date.now();
-			state.updatedAt = Date.now();
-			writeState(root, state);
-			return { ok: true };
+			return completeView(viewId);
+		},
+
+		/**
+		 * Bulk mark sessions done, skipping live/already-done rows.
+		 * @param {string[]} viewIds
+		 * @returns {{ ok: boolean, completed: number, skipped: number, completedIds: string[] }}
+		 */
+		markCompletedMany(viewIds) {
+			const ids = [...new Set((viewIds ?? []).filter(Boolean))];
+			let completed = 0;
+			let skipped = 0;
+			const completedIds = [];
+			for (const viewId of ids) {
+				const row = loadRow(root, viewId);
+				if (!row || row.state?.semanticState === "completed") {
+					skipped += 1;
+					continue;
+				}
+				const res = completeView(viewId);
+				if (res.ok) {
+					completed += 1;
+					completedIds.push(viewId);
+				} else skipped += 1;
+			}
+			return { ok: true, completed, skipped, completedIds };
 		},
 
 		/**
@@ -490,33 +574,31 @@ export function createService(opts) {
 		 * @param {{ removeWorktree?: boolean }} [archiveOpts]
 		 */
 		archive(viewId, archiveOpts = {}) {
-			const row = loadRow(root, viewId);
-			if (!row) return { ok: false, error: "Unknown session" };
-			if (row.hostAlive) sendHostMessage(row, { type: "terminate" });
-			if (row.alive && row.state?.currentRunId) {
-				const pid = readPid(root, viewId, row.state.currentRunId);
-				if (pid) killProcess(pid);
+			return archiveView(viewId, archiveOpts);
+		},
+
+		/**
+		 * Bulk archive explicit row ids, skipping live/missing rows.
+		 * @param {string[]} viewIds
+		 * @returns {{ ok: boolean, archived: number, skipped: number }}
+		 */
+		archiveMany(viewIds) {
+			const ids = [...new Set((viewIds ?? []).filter(Boolean))];
+			let archived = 0;
+			let skipped = 0;
+			for (const viewId of ids) {
+				const row = loadRow(root, viewId);
+				if (!row || isAgentBusy(row)) {
+					skipped += 1;
+					continue;
+				}
+				const res = archiveView(viewId, {
+					removeWorktree: row.meta.worktreeMode === "worktree" && !!row.meta.worktreePath,
+				});
+				if (res.ok) archived += 1;
+				else skipped += 1;
 			}
-			if (isAgentBusy(row)) {
-				const state = row.state ?? blankState(viewId);
-				state.semanticState = "stopped";
-				state.processState = "exited";
-				state.needsInput = false;
-				state.hasError = false;
-				state.question = null;
-				state.summary = "Stopped";
-				state.lastActivityAt = Date.now();
-				state.updatedAt = Date.now();
-				writeState(root, state);
-			}
-			if (archiveOpts.removeWorktree && row.meta.worktreeMode === "worktree" && row.meta.worktreePath && row.meta.repoRoot) {
-				removeWorktree(row.meta.repoRoot, row.meta.worktreePath);
-				row.meta.worktreePath = null;
-				row.meta.worktreeMode = "off";
-			}
-			row.meta.archived = true;
-			writeMeta(root, row.meta);
-			return { ok: true };
+			return { ok: true, archived, skipped };
 		},
 
 		/**
@@ -558,7 +640,7 @@ export function createService(opts) {
 				if (!looksActive || row.alive) continue;
 				const status = readStatus(root, row.meta.id, s.currentRunId);
 				if (status?.endedAt) {
-					writeState(root, projectViewState(status, now));
+					writeState(root, projectViewState(status, now, readState(root, row.meta.id) ?? row.state ?? null));
 				} else {
 					s.semanticState = "failed";
 					s.processState = "exited";
