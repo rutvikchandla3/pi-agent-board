@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createService } from "../src/runtime/service.mjs";
+import { diagnoseNodePtyFailure } from "../src/core/pty-support.mjs";
 import * as P from "../src/core/paths.mjs";
 import { createView, readState, writeHost, writeHostPid, writeState } from "../src/core/store.mjs";
 
@@ -153,6 +154,45 @@ test("dispatch schedules detached GPT title generation", () => {
 		assert.equal(titled.viewId, res.viewId);
 		assert.equal(titled.fallbackName, "fix-websocket-reconnect-bug");
 		assert.equal(titled.cwd, "/tmp/project-a");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("dispatch refreshes PTY support so a fixed install can recover without restarting Pi", () => {
+	const root = freshRoot();
+	let healthy = false;
+	const calls = [];
+	let hostLaunches = 0;
+	let jsonLaunches = 0;
+	try {
+		const svc = service(root, {
+			ptySupport: (opts = {}) => {
+				calls.push(opts);
+				return healthy
+					? { ok: true }
+					: { ok: false, reason: "posix_spawnp failed", issue: diagnoseNodePtyFailure("posix_spawnp failed", { platform: "darwin", arch: "arm64" }) };
+			},
+			launchHost: () => {
+				hostLaunches += 1;
+				return { pid: process.pid, configPath: "/no/host-config.json" };
+			},
+			launch: () => {
+				jsonLaunches += 1;
+				return { pid: null, configPath: "/no/config.json" };
+			},
+		});
+		const first = svc.dispatch("first", { cwd: "/tmp/project-a" });
+		assert.equal(first.ok, true);
+		assert.equal(first.hostMode, "json-runner");
+		assert.equal(jsonLaunches, 1);
+		healthy = true;
+		const second = svc.dispatch("second", { cwd: "/tmp/project-a" });
+		assert.equal(second.ok, true);
+		assert.equal(second.hostMode, "pty");
+		assert.equal(hostLaunches, 1);
+		assert.equal(calls.length, 2);
+		assert.equal(calls.every((opts) => opts.refresh === true), true);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

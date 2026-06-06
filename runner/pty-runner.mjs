@@ -17,7 +17,6 @@ import { readState, writeHost, writeState } from "../src/core/store.mjs";
 import { ensureNodePtySpawnHelperExecutable } from "../src/core/pty-support.mjs";
 
 const requireForPty = createRequire(import.meta.url);
-ensureNodePtySpawnHelperExecutable(requireForPty);
 
 /** @type {any|null} */
 let pty = null;
