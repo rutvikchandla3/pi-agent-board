@@ -54,7 +54,7 @@ export function stateGlyph(state, alive, hostAlive = false, unread = false) {
 		case "failed":
 			return unread ? "✖" : "✗";
 		case "idle":
-			return unread ? "•" : "·";
+			return unread ? "●" : "·";
 		case "stopped":
 			return unread ? "■" : "▪";
 		default:

@@ -10,13 +10,14 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
-import { appendFileSync, chmodSync, existsSync, readFileSync, unlinkSync } from "node:fs";
+import { appendFileSync, existsSync, unlinkSync } from "node:fs";
 import { appendLine, readJson } from "../src/core/atomic.mjs";
 import * as P from "../src/core/paths.mjs";
 import { readState, writeHost, writeState } from "../src/core/store.mjs";
+import { ensureNodePtySpawnHelperExecutable } from "../src/core/pty-support.mjs";
 
 const requireForPty = createRequire(import.meta.url);
-ensureNodePtySpawnHelperExecutable();
+ensureNodePtySpawnHelperExecutable(requireForPty);
 
 /** @type {any|null} */
 let pty = null;
@@ -212,7 +213,7 @@ function main() {
 }
 
 function spawnInteractive(command, args, opts) {
-	ensureNodePtySpawnHelperExecutable();
+	ensureNodePtySpawnHelperExecutable(requireForPty);
 	if (pty?.spawn) {
 		try {
 			const proc = pty.spawn(command, args, {
@@ -262,18 +263,6 @@ function clampInt(value, min, max, fallback) {
 	return Math.max(min, Math.min(max, Math.floor(n)));
 }
 
-function ensureNodePtySpawnHelperExecutable() {
-	try {
-		const pkg = requireForPty.resolve("node-pty/package.json");
-		const root = pkg.slice(0, -"package.json".length);
-		for (const rel of [`prebuilds/${process.platform}-${process.arch}/spawn-helper`, "build/Release/spawn-helper"]) {
-			const helper = root + rel;
-			if (existsSync(helper)) chmodSync(helper, 0o755);
-		}
-	} catch {
-		/* node-pty optional/unavailable */
-	}
-}
 
 function markRowFailed(root, viewId, message) {
 	const now = Date.now();

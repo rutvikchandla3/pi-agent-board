@@ -109,5 +109,5 @@ test("stateGlyph uses stronger variants for unread rows", () => {
 	assert.equal(stateGlyph("working", true, false, true), "◉");
 	assert.equal(stateGlyph("needs_input", false, false, true), "◆");
 	assert.equal(stateGlyph("completed", false, false, true), "✔");
-	assert.equal(stateGlyph("idle", false, false, true), "•");
+	assert.equal(stateGlyph("idle", false, false, true), "●");
 });

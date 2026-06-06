@@ -41,6 +41,7 @@ test("tool_execution_start moves to working and sets currentTool", () => {
 	assert.equal(s.currentTool.summary, "Editing a.ts");
 	assert.equal(s.summary, "Editing a.ts");
 	assert.equal(s.toolCount, 1);
+	assert.equal(s.lastAgentActivityAt, null);
 });
 
 test("message_end assistant updates preview and detects question", () => {
@@ -109,14 +110,21 @@ test("finalizeRun -> stopped when stoppedByUser", () => {
 	assert.equal(s.semanticState, "stopped");
 });
 
-test("projectViewState mirrors status", () => {
+test("projectViewState preserves last unread message until a new assistant reply arrives", () => {
 	const s = createRunStatus(cfg(), 5, 1000);
 	reduceEvent(s, { type: "tool_execution_start", toolName: "edit", args: { file_path: "a.ts" } }, 2000);
-	const vs = projectViewState(s, 2500, { lastVisitedAt: 1500 });
+	const vs = projectViewState(s, 2500, { lastVisitedAt: 1500, lastAgentActivityAt: 1200 });
 	assert.equal(vs.viewId, "view_a");
 	assert.equal(vs.currentRunId, "run_1");
 	assert.equal(vs.semanticState, "working");
 	assert.deepEqual(vs.latestTool, { name: "edit", path: "a.ts" });
 	assert.equal(vs.lastVisitedAt, 1500);
-	assert.equal(vs.lastAgentActivityAt, 2000);
+	assert.equal(vs.lastAgentActivityAt, 1200);
+
+	reduceEvent(s, {
+		type: "message_end",
+		message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Implemented it." }] },
+	}, 3000);
+	const next = projectViewState(s, 3500, vs);
+	assert.equal(next.lastAgentActivityAt, 3000);
 });

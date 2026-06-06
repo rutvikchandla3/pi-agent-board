@@ -100,12 +100,11 @@ cat ~/.pi/agent/agent-board/views/*/runs/*/events.jsonl
   there with its last state (rehydrated from disk). If a run's runner died without finishing,
   the dashboard reconciles it to `failed (runner exited)` on open.
 
-## 7. Same-repo write safety (worktree)
+## 7. Same-repo session launches
 
-- Dispatch one writer task in a git repo, then (while it's running) dispatch a second in the
-  **same repo**. The second is auto-isolated into its own git worktree (under
-  `~/.pi/agent/agent-board/worktrees/<viewId>`) so the two can't clobber each other. In dispatch
-  mode you can also press **Tab** to force a worktree.
+- Dispatch one task in a git repo, then (while it's running) dispatch a second in the
+  **same repo**. Both launches should be allowed. The extension never creates a git worktree on
+  its own.
 
 ## 8. Summary model
 

@@ -142,13 +142,12 @@ A session becomes **Read** when the user intentionally opens that session in a d
 
 ## 4.2 When a row becomes Unread again
 
-A previously read row becomes **Unread** when new agent-side activity happens after the last visit, for example:
+A previously read row becomes **Unread** when a new assistant reply lands after the last visit, for example:
 - new assistant message
-- new blocker/question
-- new tool/result activity that changes the summary
-- session re-enters `needs_input`
+- new blocker/question raised in that message
+- session re-enters `needs_input` because of that message
 
-User-authored actions alone should not create unread state.
+User-authored actions alone should not create unread state, and intermediate tool churn alone should not flip unread.
 
 ---
 
@@ -263,7 +262,7 @@ This is simpler and more reliable than storing a raw boolean.
 
 ### Read state
 - attach / transcript => mark read
-- new assistant-side activity => unread again
+- new assistant reply => unread again
 - unread indicator => subtle left dot/bar
 
 ---

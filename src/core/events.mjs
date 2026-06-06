@@ -73,7 +73,7 @@ export function reduceEvent(status, event, now) {
 			status.toolCount += 1;
 			status.semanticState = "working";
 			status.lastActivityAt = now;
-			status.lastAgentActivityAt = now;
+			// Unread is keyed off the latest assistant message, not intermediate tool churn.
 			meaningful = true;
 			break;
 		}
@@ -82,7 +82,7 @@ export function reduceEvent(status, event, now) {
 			status.currentTool = null;
 			status.semanticState = "working";
 			status.lastActivityAt = now;
-			status.lastAgentActivityAt = now;
+			// Unread is keyed off the latest assistant message, not intermediate tool churn.
 			meaningful = true;
 			break;
 		}
