@@ -41,6 +41,10 @@ pi
 > **Requires working pi provider auth.** The dashboard launches background `pi` workers; if pi
 > can't reach a model provider, rows will sit in `Running`. Confirm with
 > `pi --mode json -p --no-session "say hi"` (must end in an `agent_end` event). See **VERIFY.md**.
+>
+> If the header shows **`node-pty unavailable`**, press **`!`** inside the dashboard for a
+> cause-specific diagnosis and fix steps. The board now surfaces common macOS `spawn-helper`
+> permission/quarantine problems, missing `node-pty`, and native binary/runtime mismatches.
 
 ## What it does
 
@@ -48,13 +52,14 @@ pi
 - **`pi /agent-board`** starts directly in a cleaner dashboard-first UI (no normal Pi header/footer chrome) and quits Pi when you leave it.
 - **Dispatch** by typing in the bottom input and pressing `enter` → a **Start session** dialog opens with default focus on **Start session**; press `enter` again to launch, or change **cwd**, **model**, and **thinking** first. The dialog remembers your last launch defaults and prefers scoped models for the selected cwd when Pi settings define them.
 - **Live rows** grouped by stage: Queued · Running · Needs input · In Progress · Done · Failed · Stopped.
+- **GPT-generated session titles:** new sessions start with a fallback slug, then a detached `openai-codex/gpt-5.5` title pass at **low** thinking renames them to a concise 3–4 word label when provider auth is available.
 - **Peek** (`space`) a row for its summary, blocker/question, and latest output; **reply** (`r`) inline without attaching.
 - **Attach** (`enter` or `→` / `>`) to continue the full interactive Pi session (confirms + interrupts if it's still running). The live PTY surface supports clickable links plus drag/double-click copy; detach with `←`, `ctrl+]`, or `ctrl+g`.
 - **Transcript view** (`v`) opens a full-screen read-only live transcript without interrupting it; **back** with (`←` / `<`).
 - **Manage:** rename (`ctrl+r`), pin (`ctrl+t`), stop (`ctrl+s`), mark done (`d`), multi-select (`m` → `space` toggle / `a` all visible / `u` clear / `d` move done / `ctrl+x` delete selected done batch), delete selected (`ctrl+x`, archives row & keeps the session), delete all inactive rows in the selected state (`X`), filter (`/`, supports `s:<state>` + free text), help (`?`, opens a hotkeys dialog).
 - **Read hints:** unread sessions use a stronger version of each stage icon instead of an extra dot, and the header/footer surface the unread count for quick scanning.
 - **Durable & resumable:** survives `/reload` and pi restart; reconciles runs whose monitor died.
-- **Safe parallelism:** same-repo parallel writers are auto-isolated into git worktrees.
+- **Parallel sessions:** Agent Board does not auto-create worktrees and does not block you from launching multiple sessions in the same repo.
 
 ## How it works
 
@@ -108,4 +113,4 @@ npm run pack:dry
 npm run verify
 ```
 
-Config env: `AGENT_BOARD_ROOT` (store location), `AGENT_BOARD_SUMMARY_MODEL` (summary model; default `gpt-4o`, `off` to disable), `AGENT_BOARD_DISABLE_PTY=1` / `AGENT_BOARD_FORCE_PTY=1` (override PTY attach mode), `AGENT_BOARD_ATTACH_MOUSE=0` (fall back to terminal-native selection). Legacy `AGENT_VIEW_*` env vars are still honored for migration.
+Config env: `AGENT_BOARD_ROOT` (store location), `AGENT_BOARD_SUMMARY_MODEL` (summary model; default `gpt-4o`, `off` to disable), `AGENT_BOARD_TITLE_MODEL` (session title model; default `openai-codex/gpt-5.5`, `off` to disable), `AGENT_BOARD_TITLE_THINKING_LEVEL` (session title thinking level; default `low`), `AGENT_BOARD_DISABLE_PTY=1` / `AGENT_BOARD_FORCE_PTY=1` (override PTY attach mode), `AGENT_BOARD_ATTACH_MOUSE=0` (fall back to terminal-native selection). Legacy `AGENT_VIEW_*` env vars are still honored for migration.

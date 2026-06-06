@@ -33,6 +33,8 @@ export const hostPath = (root, viewId) => path.join(viewDir(root, viewId), "host
 /** @param {string} root @param {string} viewId */
 export const hostConfigPath = (root, viewId) => path.join(viewDir(root, viewId), "host-config.json");
 /** @param {string} root @param {string} viewId */
+export const titleConfigPath = (root, viewId) => path.join(viewDir(root, viewId), "title-config.json");
+/** @param {string} root @param {string} viewId */
 export const controlSocketPath = (root, viewId) => path.join(viewDir(root, viewId), "control.sock");
 /** @param {string} root @param {string} viewId */
 export const screenLogPath = (root, viewId) => path.join(viewDir(root, viewId), "screen.log");

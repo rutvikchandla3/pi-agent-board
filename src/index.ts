@@ -15,6 +15,7 @@ import { openDashboard, registerAgentBoardCommand } from "./commands/agent-board
 
 const RUNNER_SCRIPT = fileURLToPath(new URL("../runner/job-runner.mjs", import.meta.url));
 const PTY_RUNNER_SCRIPT = fileURLToPath(new URL("../runner/pty-runner.mjs", import.meta.url));
+const TITLE_RUNNER_SCRIPT = fileURLToPath(new URL("../runner/title-runner.mjs", import.meta.url));
 
 export default function piAgentBoard(pi: ExtensionAPI): void {
 	const root = defaultRoot();
@@ -26,6 +27,7 @@ export default function piAgentBoard(pi: ExtensionAPI): void {
 	registerAgentBoardCommand(pi, {
 		root,
 		runnerScript: RUNNER_SCRIPT,
+		titleRunnerScript: TITLE_RUNNER_SCRIPT,
 		ptyRunnerScript: PTY_RUNNER_SCRIPT,
 		piCommand,
 		piArgsPrefix,
@@ -39,7 +41,7 @@ export default function piAgentBoard(pi: ExtensionAPI): void {
 
 	// Footer status: reconcile stale rows and surface how many need attention.
 	const serviceFor = (ctx: ExtensionContext) =>
-		createService({ root, runnerScript: RUNNER_SCRIPT, ptyRunnerScript: PTY_RUNNER_SCRIPT, piCommand, piArgsPrefix, defaultCwd: ctx.cwd });
+		createService({ root, runnerScript: RUNNER_SCRIPT, ptyRunnerScript: PTY_RUNNER_SCRIPT, titleRunnerScript: TITLE_RUNNER_SCRIPT, piCommand, piArgsPrefix, defaultCwd: ctx.cwd });
 
 	const updateStatus = (ctx: ExtensionContext) => {
 		try {
@@ -64,7 +66,7 @@ export default function piAgentBoard(pi: ExtensionAPI): void {
 	pi.on("session_start", async (event, ctx) => {
 		updateStatus(ctx);
 		if (event.reason === "startup" && !isHostedChild && pi.getFlag("agent-board") === true && ctx.hasUI) {
-			const service = createService({ root, runnerScript: RUNNER_SCRIPT, ptyRunnerScript: PTY_RUNNER_SCRIPT, piCommand, piArgsPrefix, defaultCwd: ctx.cwd });
+			const service = createService({ root, runnerScript: RUNNER_SCRIPT, ptyRunnerScript: PTY_RUNNER_SCRIPT, titleRunnerScript: TITLE_RUNNER_SCRIPT, piCommand, piArgsPrefix, defaultCwd: ctx.cwd });
 			service.reconcile();
 			ctx.ui.setWorkingVisible(false);
 			ctx.ui.setHeader(() => ({ render: () => [], invalidate() {} }));

@@ -27,6 +27,16 @@ import { readState, writeState, type Row } from "../core/store.mjs";
 import type { createService } from "../runtime/service.mjs";
 
 type Service = ReturnType<typeof createService>;
+type PtyIssue = {
+	id: string;
+	title: string;
+	statusLabel: string;
+	summary: string;
+	fixHint: string;
+	steps: string[];
+	rawReason: string;
+};
+type PtyHealth = { ok: boolean; reason: string | null; staleHosts: number; liveHosts: number; issue?: PtyIssue | null };
 
 interface ThemeLike {
 	fg(color: string, text: string): string;
@@ -49,7 +59,7 @@ type LaunchModel = {
 type LaunchChoice = { model: LaunchModel; thinkingLevel?: ThinkingLevel };
 type LaunchPicker = "cwd" | "model" | "thinking" | null;
 
-type Mode = "list" | "select" | "dispatch" | "filter" | "peek" | "reply" | "rename" | "confirm" | "help" | "session" | "launch";
+type Mode = "list" | "select" | "dispatch" | "filter" | "peek" | "reply" | "rename" | "confirm" | "help" | "ptyHelp" | "session" | "launch";
 
 interface PendingConfirm {
 	prompt: string;
@@ -103,9 +113,9 @@ export class DashboardComponent implements Component {
 	private selectedIds = new Set<string>();
 	private input = "";
 	private filterQuery = "";
-	private worktreeNext = false;
 	private pending: PendingConfirm | null = null;
 	private helpReturnMode: ReturnableMode = "list";
+	private ptyHelpReturnMode: ReturnableMode = "list";
 	private peekId: string | null = null;
 	private scrollTop = 0;
 	private sessionScrollTop = 0;
@@ -194,6 +204,11 @@ export class DashboardComponent implements Component {
 		this.mode = "help";
 	}
 
+	private openPtyHelp(returnMode: ReturnableMode): void {
+		this.ptyHelpReturnMode = returnMode;
+		this.mode = "ptyHelp";
+	}
+
 	private exitSelectionMode(clear = true): void {
 		if (clear) this.selectedIds.clear();
 		this.mode = "list";
@@ -257,7 +272,7 @@ export class DashboardComponent implements Component {
 				this.handleSelectKey(data);
 				break;
 			case "dispatch":
-				this.handleTextMode(data, () => this.openLaunchDialog(), () => this.leaveDispatchMode(), { tabToggle: true });
+				this.handleTextMode(data, () => this.openLaunchDialog(), () => this.leaveDispatchMode());
 				break;
 			case "filter":
 				this.handleTextMode(data, () => this.toListMode(), () => this.clearFilter(), { live: true });
@@ -283,6 +298,9 @@ export class DashboardComponent implements Component {
 			case "help":
 				this.mode = this.helpReturnMode;
 				break;
+			case "ptyHelp":
+				this.mode = this.ptyHelpReturnMode;
+				break;
 		}
 		this.requestFullRender();
 	}
@@ -304,14 +322,11 @@ export class DashboardComponent implements Component {
 			if (this.input.trim()) return this.openLaunchDialog();
 			return this.attachSelected();
 		}
-		if (matchesKey(data, Key.tab)) {
-			this.worktreeNext = !this.worktreeNext;
-			return;
-		}
 		if (matchesKey(data, Key.space)) return this.openPeek();
 		if (data === "m") return this.startSelectionMode();
 		if (data === "/") return this.startFilter();
 		if (data === "?") return this.openHelp("list");
+		if (data === "!") return this.openPtyHelp("list");
 		if (data === "i") return this.startDispatch();
 		if (matchesKey(data, Key.ctrl("r"))) return this.startRename();
 		if (matchesKey(data, Key.ctrl("t"))) return this.togglePin();
@@ -356,6 +371,7 @@ export class DashboardComponent implements Component {
 			return;
 		}
 		if (data === "?") return this.openHelp("select");
+		if (data === "!") return this.openPtyHelp("select");
 	}
 
 	private handlePeekKey(data: string): void {
@@ -373,9 +389,11 @@ export class DashboardComponent implements Component {
 		if (matchesKey(data, Key.enter) || data === "r") return this.startReply();
 		if (data === "d") return this.confirmDone();
 		if (data === "a") return this.attachPeek();
+		if (data === "!") return this.openPtyHelp("peek");
 	}
 
 	private handleSessionKey(data: string): void {
+		if (data === "!") return this.openPtyHelp("session");
 		const termRows = this.tui.terminal?.rows ?? 24;
 		const page = Math.max(1, termRows - 8);
 		if (matchesKey(data, Key.left) || matchesKey(data, Key.escape) || data === "<") {
@@ -649,19 +667,10 @@ export class DashboardComponent implements Component {
 	}
 
 	/** Shared text-editing for input modes. */
-	private handleTextMode(
-		data: string,
-		onSubmit: () => void,
-		onCancel: () => void,
-		opts: { live?: boolean; tabToggle?: boolean } = {},
-	): void {
+	private handleTextMode(data: string, onSubmit: () => void, onCancel: () => void, opts: { live?: boolean } = {}): void {
 		void opts.live; // live filtering is driven by editor.onChange.
 		if (matchesKey(data, Key.enter)) return onSubmit();
 		if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) return onCancel();
-		if (opts.tabToggle && matchesKey(data, Key.tab)) {
-			this.worktreeNext = !this.worktreeNext;
-			return;
-		}
 		this.handleEditorInput(data);
 	}
 
@@ -730,7 +739,6 @@ export class DashboardComponent implements Component {
 		const launchThinking = launchOpts?.thinkingLevel ?? this.launch?.thinking ?? this.deps.currentThinkingLevel;
 		const res = this.deps.service.dispatch(text, {
 			cwd: launchCwd,
-			worktree: this.worktreeNext,
 			model: launchModel,
 			thinkingLevel: launchThinking,
 		});
@@ -744,13 +752,12 @@ export class DashboardComponent implements Component {
 			}
 			this.selectedId = res.viewId ?? this.selectedId;
 			if (res.hostMode === "json-runner") {
-				this.notice(`Dispatched with non-live fallback${res.usedWorktree ? " (worktree)" : ""}: ${res.fallbackReason ?? "PTY unavailable"}`, "warn");
+				this.notice(`Dispatched with non-live fallback: ${res.fallbackReason ?? "PTY unavailable"}`, "warn");
 			} else {
-				this.notice(`Dispatched${res.usedWorktree ? " (worktree)" : ""}: ${truncate(text, 40)}`, "info");
+				this.notice(`Dispatched: ${truncate(text, 40)}`, "info");
 			}
 		}
 		this.setInput("");
-		this.worktreeNext = false;
 		this.launch = null;
 		this.mode = "list";
 		this.inputNotice = null;
@@ -887,12 +894,11 @@ export class DashboardComponent implements Component {
 	private confirmDelete(): void {
 		const row = this.selectedRow();
 		if (!row) return;
-		const hasWorktree = row.meta.worktreeMode === "worktree" && !!row.meta.worktreePath;
 		const busy = isAgentBusy(row);
 		this.pending = {
-			prompt: `Delete "${row.meta.name}"?${busy ? " Active run will be stopped." : ""} Session file is preserved.${hasWorktree ? " Worktree will be removed." : ""} (y/N)`,
+			prompt: `Delete "${row.meta.name}"?${busy ? " Active run will be stopped." : ""} Session file is preserved. (y/N)`,
 			onYes: () => {
-				const res = this.deps.service.archive(row.meta.id, { removeWorktree: hasWorktree });
+				const res = this.deps.service.archive(row.meta.id);
 				if (!res.ok) this.notice(res.error ?? "Delete failed", "error");
 				else this.notice("Deleted", "info");
 				this.refresh();
@@ -925,9 +931,8 @@ export class DashboardComponent implements Component {
 		const rows = this.selectedBatchRows();
 		if (rows.length === 0) return this.notice("Select one or more Done sessions first", "warn");
 		if (rows.some((row) => rowState(row) !== "completed")) return this.notice("Only Done sessions can be batch deleted", "warn");
-		const worktrees = rows.filter((row) => row.meta.worktreeMode === "worktree" && !!row.meta.worktreePath).length;
 		this.pending = {
-			prompt: `Delete ${rows.length} done session${rows.length === 1 ? "" : "s"}? Session files are preserved.${worktrees ? ` ${worktrees} worktree${worktrees === 1 ? "" : "s"} will be removed.` : ""} (y/N)`,
+			prompt: `Delete ${rows.length} done session${rows.length === 1 ? "" : "s"}? Session files are preserved. (y/N)`,
 			returnMode: "select",
 			onYes: () => {
 				const res = this.deps.service.archiveMany?.(rows.map((row) => row.meta.id)) ?? { ok: true, archived: 0, skipped: rows.length };
@@ -1017,11 +1022,14 @@ export class DashboardComponent implements Component {
 		}).length;
 		const lines: string[] = [];
 		const focus = this.selectedRow() ?? allRows[0] ?? null;
+		const ptyHealth = this.ptyHealth();
 
-		lines.push(...this.renderOverview(width, focus, { needs, working, completed, unread }));
+		lines.push(...this.renderOverview(width, focus, { needs, working, completed, unread }, ptyHealth));
+		if (!ptyHealth.ok && ptyHealth.issue) lines.push(...renderPtyWarningBanner(this.theme, ptyHealth.issue, width));
 		if (this.flash) lines.push(...renderFlashBanner(this.flash, width, { bottomGap: true }));
 
 		if (this.mode === "help") return this.fitToHeight(this.renderHelp(width), width);
+		if (this.mode === "ptyHelp") return this.fitToHeight(this.renderPtyHelp(width, ptyHealth), width);
 		if (this.mode === "peek" || this.mode === "reply") return this.fitToHeight(lines.concat(this.renderPeek(width)), width);
 		if (this.mode === "session") return this.fitToHeight(lines.concat(this.renderSession(width)), width);
 		if (this.mode === "launch") return this.fitToHeight(lines.concat(this.renderLaunch(width)), width);
@@ -1049,16 +1057,28 @@ export class DashboardComponent implements Component {
 		return out;
 	}
 
+	private ptyHealth(): PtyHealth {
+		return this.deps.service.ptyHealth?.() ?? {
+			ok: false,
+			reason: "unknown",
+			issue: null,
+			staleHosts: 0,
+			liveHosts: 0,
+		};
+	}
+
 	private renderOverview(
 		width: number,
 		row: Row | null,
 		counts: { needs: number; working: number; completed: number; unread: number },
+		ptyHealth: PtyHealth,
 	): string[] {
 		return renderAgentboardHeader(
 			width,
 			this.theme,
 			row,
 			counts,
+			ptyHealth,
 			this.filterQuery,
 			this.deps.defaultCwd,
 			this.mode === "select" ? this.selectionCount() : 0,
@@ -1107,9 +1127,7 @@ export class DashboardComponent implements Component {
 		const live = selected ? selected.hostAlive && isAgentBusy(selected) : false;
 		const unread = this.unreadCount();
 		if (this.mode === "dispatch") {
-			const hints = ["esc normal", "enter launch", "shift+enter newline", "←/→ edit", "ctrl/alt+←/→ word"];
-			if (this.input.trim() || this.worktreeNext) hints.splice(2, 0, `tab worktree:${this.worktreeNext ? "on" : "off"}`);
-			return this.hintLine("INSERT", "success", hints);
+			return this.hintLine("INSERT", "success", ["esc normal", "enter launch", "shift+enter newline", "←/→ edit", "ctrl/alt+←/→ word"]);
 		}
 		if (this.mode === "select") {
 			return this.hintLine("SELECT", "accent", [
@@ -1124,9 +1142,8 @@ export class DashboardComponent implements Component {
 			]);
 		}
 		const primary = this.input.trim() ? "enter launch" : live ? "enter attach live" : "enter resume";
-		const hints = ["i insert", primary, "→ attach", "m multi-select", ...(unread > 0 ? [`•${unread} unread`] : []), "d done", "space peek", "v transcript", "ctrl+r rename", "ctrl+x delete", "X delete state", "/ filter", "? help"];
+		const hints = ["i insert", primary, "→ attach", "m multi-select", ...(unread > 0 ? [`•${unread} unread`] : []), "d done", "space peek", "v transcript", "ctrl+r rename", "ctrl+x delete", "X delete state", "/ filter", "! pty", "? help"];
 		if (this.input.trim()) hints.splice(1, 0, "esc clear");
-		if (this.input.trim() || this.worktreeNext) hints.splice(this.input.trim() ? 3 : 2, 0, `tab worktree:${this.worktreeNext ? "on" : "off"}`);
 		return this.hintLine("NORMAL", "muted", hints);
 	}
 
@@ -1326,7 +1343,6 @@ export class DashboardComponent implements Component {
 		lines.push(this.renderLaunchField(inner, 1, `cwd      ${displayPath(launch.cwd)}`, launch.picker === null && launch.fieldIndex === 1));
 		lines.push(this.renderLaunchField(inner, 2, `model    ${launch.model ? formatLaunchModel(launch.model) : "default"}`, launch.picker === null && launch.fieldIndex === 2));
 		lines.push(this.renderLaunchField(inner, 3, `thinking ${launch.thinking}`, launch.picker === null && launch.fieldIndex === 3));
-		if (this.worktreeNext) lines.push(t.fg("warning", "worktree enabled for this launch"));
 		lines.push("");
 		if (launch.picker === "cwd") {
 			lines.push(t.fg("warning", `cwd› ${singleLineInput(launch.cwdQuery)}${cursor()}`));
@@ -1396,8 +1412,8 @@ export class DashboardComponent implements Component {
 			["→ or >", "Attach to the selected real Pi session"],
 			["d", "Confirm and mark selected inactive session done"],
 			["space", "Peek when input is empty; in multi-select: toggle current row"],
-			["tab", "Toggle worktree for the next dispatch"],
 			["/", "Filter in normal mode; use i then / for slash commands"],
+			["!", "Open node-pty diagnostics and fix steps"],
 			["ctrl+r/t/s/x", "Rename · pin · stop · delete selected"],
 			["X", "Delete all inactive sessions in selected state"],
 			["v", "Open read-only transcript view"],
@@ -1409,6 +1425,43 @@ export class DashboardComponent implements Component {
 		for (const [k, v] of rows) dialog.push(`  ${t.fg("accent", k.padEnd(14))} ${t.fg("muted", v)}`);
 		dialog.push("");
 		dialog.push(t.fg("dim", `  press any key to return to ${this.helpReturnMode}`));
+		return renderCenteredBox(dialog, width, this.tui.terminal?.rows ?? 24, t);
+	}
+
+	private renderPtyHelp(width: number, health: PtyHealth): string[] {
+		const t = this.theme;
+		const dialog: string[] = [t.fg("accent", t.bold("node-pty diagnostics")), ""];
+		const wrapWidth = Math.max(32, width - 16);
+		if (health.ok) {
+			dialog.push(t.fg("success", "  Status: healthy"));
+			dialog.push(t.fg("muted", `  Live hosts: ${health.liveHosts} · stale hosts: ${health.staleHosts}`));
+			dialog.push("");
+			dialog.push(t.fg("dim", `  press any key to return to ${this.ptyHelpReturnMode}`));
+			return renderCenteredBox(dialog, width, this.tui.terminal?.rows ?? 24, t);
+		}
+		const issue = health.issue;
+		dialog.push(t.fg("warning", `  Status: unavailable · ${issue?.statusLabel ?? "unknown cause"}`));
+		if (issue?.summary) {
+			dialog.push("");
+			dialog.push(...wrap(`  ${issue.summary}`, wrapWidth, 8));
+		}
+		if (issue?.fixHint) dialog.push(t.fg("warning", `  Fix: ${issue.fixHint}`));
+		if (issue?.steps?.length) {
+			dialog.push("");
+			dialog.push(t.fg("accent", "  Suggested steps"));
+			for (const step of issue.steps) {
+				if (!step.trim()) continue;
+				if (step.endsWith(":")) dialog.push(t.fg("muted", `  ${step}`));
+				else dialog.push(...wrap(`  ${step}`, wrapWidth, 10));
+			}
+		}
+		if (issue?.rawReason || health.reason) {
+			dialog.push("");
+			dialog.push(t.fg("accent", "  Raw reason"));
+			dialog.push(...wrap(`  ${issue?.rawReason ?? health.reason ?? "unknown"}`, wrapWidth, 8));
+		}
+		dialog.push("");
+		dialog.push(t.fg("dim", `  press any key to return to ${this.ptyHelpReturnMode}`));
 		return renderCenteredBox(dialog, width, this.tui.terminal?.rows ?? 24, t);
 	}
 
@@ -1529,6 +1582,7 @@ function renderAgentboardHeader(
 	theme: ThemeLike,
 	row: Row | null,
 	counts: HeaderCounts,
+	ptyHealth: PtyHealth,
 	filterQuery: string,
 	defaultCwd: string,
 	selectionCount = 0,
@@ -1536,14 +1590,14 @@ function renderAgentboardHeader(
 	if (width < AGENTBOARD_HEADER_MIN_WIDTH) {
 		const raw = [
 			...blankLines(HEADER_TOP_PADDING),
-			clip(`${" ".repeat(HEADER_LEFT_PADDING)}${ansiFg(56, 189, 248, "◉")} ${ansiFg(248, 250, 252, theme.bold("AgentBoard"))} ${ansiFg(148, 163, 184, AGENTBOARD_VERSION)}`, width),
+			clip(`${" ".repeat(HEADER_LEFT_PADDING)}${ansiFg(56, 189, 248, "◉")} ${ansiFg(248, 250, 252, theme.bold("AgentBoard"))} ${ansiFg(148, 163, 184, AGENTBOARD_VERSION)} ${theme.fg("dim", "·")} ${renderPtyHealth(theme, ptyHealth)}`, width),
 			clip(headerStageSummary(theme, counts, filterQuery, true), width),
 			...blankLines(HEADER_BOTTOM_PADDING),
 		];
 		return raw.map((line, i) => headerBgLine(line, width, i));
 	}
 
-	const textRows = headerTextRows(theme, row, counts, filterQuery, defaultCwd, selectionCount);
+	const textRows = headerTextRows(theme, row, counts, ptyHealth, filterQuery, defaultCwd, selectionCount);
 	const textStart = Math.max(0, Math.round((PI_ICON.length - textRows.length) / 2));
 	const raw = blankLines(HEADER_TOP_PADDING);
 	raw.push(
@@ -1559,11 +1613,12 @@ function headerTextRows(
 	theme: ThemeLike,
 	row: Row | null,
 	counts: HeaderCounts,
+	ptyHealth: PtyHealth,
 	filterQuery: string,
 	defaultCwd: string,
 	selectionCount: number,
 ): string[] {
-	const title = `${ansiFg(248, 250, 252, theme.bold("AgentBoard"))} ${ansiFg(148, 163, 184, AGENTBOARD_VERSION)}`;
+	const title = `${ansiFg(248, 250, 252, theme.bold("AgentBoard"))} ${ansiFg(148, 163, 184, AGENTBOARD_VERSION)} ${theme.fg("dim", "·")} ${renderPtyHealth(theme, ptyHealth)}`;
 	const contextBits: string[] = [];
 	let contextPrefix = ansiFg(148, 163, 184, "Background Pi sessions");
 	if (row) {
@@ -1604,6 +1659,34 @@ function headerUnreadPart(theme: ThemeLike, count: number): string {
 
 function headerStagePart(theme: ThemeLike, state: keyof typeof GROUP_LABELS, count: number, label: string): string {
 	return `${stageFg(state, String(count))} ${theme.fg("dim", label)}`;
+}
+
+function renderPtyHealth(theme: ThemeLike, health: PtyHealth): string {
+	const text = ptyHealthText(health);
+	if (!health.ok) return theme.fg("error", text);
+	if (health.staleHosts > 0) return theme.fg("warning", text);
+	return theme.fg("success", text);
+}
+
+function renderPtyWarningBanner(theme: ThemeLike, issue: PtyIssue, width: number): string[] {
+	return renderFlashBanner(
+		{ text: `${issue.summary} Fix: ${issue.fixHint} Press ! for exact steps.`, level: "warn" },
+		width,
+		{ bottomGap: true },
+	);
+}
+
+function ptyHealthText(health: PtyHealth): string {
+	if (!health.ok) return `node-pty unavailable${health.issue?.statusLabel ? ` · ${health.issue.statusLabel}` : health.reason ? ` (${compactPtyReason(health.reason)})` : ""}`;
+	if (health.staleHosts > 0) return `node-pty degraded · stale:${health.staleHosts}`;
+	return health.liveHosts > 0 ? `node-pty healthy · hosts:${health.liveHosts}` : "node-pty healthy";
+}
+
+function compactPtyReason(reason: string): string {
+	const cleaned = String(reason || "").replace(/\s+/g, " ").trim();
+	if (!cleaned) return "unknown";
+	const first = firstSentence(cleaned);
+	return truncate(first.length >= 12 ? first : cleaned, 44);
 }
 
 const STAGE_RGB = {

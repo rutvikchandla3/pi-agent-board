@@ -4,7 +4,7 @@
  * safety rule. Pure node + core modules; the Pi-coupled bits (attach, dialogs) live in
  * the command handler. The pi invocation + runner path are injected (resolved in index.ts).
  */
-import { chmodSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createConnection } from "node:net";
 import { resolve } from "node:path";
@@ -12,7 +12,7 @@ import { finalizeRun, projectViewState, reduceEvent } from "../core/events.mjs";
 import { isGenericStatusText } from "../core/derive.mjs";
 import { firstSentence, truncate } from "../core/heuristics.mjs";
 import { newRunId, newViewId, slugifyTask } from "../core/ids.mjs";
-import { launchHost as launchHostProcess, launchRun } from "../core/launch.mjs";
+import { launchHost as launchHostProcess, launchRun, launchTitle as launchTitleProcess } from "../core/launch.mjs";
 import { gitRepoRoot } from "../core/repo.mjs";
 import { killProcess } from "../core/pid.mjs";
 import * as P from "../core/paths.mjs";
@@ -29,7 +29,7 @@ import {
 	writeMeta,
 	writeState,
 } from "../core/store.mjs";
-import { addWorktree, removeWorktree, worktreeBranch } from "../core/worktree.mjs";
+import { diagnoseNodePtyFailure, ensureNodePtySpawnHelperExecutable, nodePtyFallbackMessage, probeNodePtyEnvironment } from "../core/pty-support.mjs";
 
 /** @typedef {import("../core/types.mjs").RunKind} RunKind */
 
@@ -41,15 +41,19 @@ import { addWorktree, removeWorktree, worktreeBranch } from "../core/worktree.mj
  *   piCommand: string,
  *   piArgsPrefix: string[],
  *   defaultCwd: string,
+ *   titleRunnerScript?: string,
  *   launch?: typeof launchRun,
  *   launchHost?: typeof launchHostProcess,
+ *   launchTitle?: typeof launchTitleProcess,
  * }} opts
  */
 export function createService(opts) {
 	const root = opts.root;
 	const launch = opts.launch ?? launchRun;
 	const launchHostImpl = opts.launchHost ?? launchHostProcess;
+	const launchTitleImpl = opts.launchTitle ?? launchTitleProcess;
 	const ptyRunnerScript = opts.ptyRunnerScript ?? opts.runnerScript;
+	const titleRunnerScript = opts.titleRunnerScript ?? null;
 
 	/**
 	 * Launch a run (dispatch or reply) against an existing view, updating its state to queued.
@@ -109,6 +113,32 @@ export function createService(opts) {
 		return { pid, socketPath: P.controlSocketPath(root, meta.id) };
 	}
 
+	/**
+	 * Best-effort detached title generation. If this fails or times out, the fallback slug
+	 * remains as the row name.
+	 * @param {import("../core/types.mjs").ViewMeta} meta
+	 * @param {string} prompt
+	 */
+	function queueGeneratedTitle(meta, prompt) {
+		if (!titleRunnerScript) return;
+		/** @type {import("../core/types.mjs").TitleConfig} */
+		const config = {
+			root,
+			viewId: meta.id,
+			cwd: meta.cwd,
+			prompt,
+			fallbackName: meta.name,
+			piCommand: opts.piCommand,
+			piArgsPrefix: opts.piArgsPrefix,
+			model: null,
+		};
+		try {
+			launchTitleImpl(root, config, { runnerScript: titleRunnerScript });
+		} catch {
+			/* best effort */
+		}
+	}
+
 	/** @param {string} viewId @param {string|null} runId */
 	function markQueued(viewId, runId) {
 		const state = readState(root, viewId) ?? blankState(viewId);
@@ -157,10 +187,9 @@ export function createService(opts) {
 
 	/**
 	 * @param {string} viewId
-	 * @param {{ removeWorktree?: boolean }} [archiveOpts]
 	 * @returns {{ ok: boolean, error?: string }}
 	 */
-	function archiveView(viewId, archiveOpts = {}) {
+	function archiveView(viewId) {
 		const row = loadRow(root, viewId);
 		if (!row) return { ok: false, error: "Unknown session" };
 		if (row.hostAlive) sendHostMessage(row, { type: "terminate" });
@@ -179,11 +208,6 @@ export function createService(opts) {
 			state.lastActivityAt = Date.now();
 			state.updatedAt = Date.now();
 			writeState(root, state);
-		}
-		if (archiveOpts.removeWorktree && row.meta.worktreeMode === "worktree" && row.meta.worktreePath && row.meta.repoRoot) {
-			removeWorktree(row.meta.repoRoot, row.meta.worktreePath);
-			row.meta.worktreePath = null;
-			row.meta.worktreeMode = "off";
 		}
 		row.meta.archived = true;
 		writeMeta(root, row.meta);
@@ -210,18 +234,6 @@ export function createService(opts) {
 			lastVisitedAt: null,
 			lastAgentActivityAt: null,
 		};
-	}
-
-	/**
-	 * Rows that are actively running a writer in the given repo (for the safety rule).
-	 * @param {string|null} repoRoot
-	 * @returns {import("../core/store.mjs").Row[]}
-	 */
-	function activeWritersInRepo(repoRoot) {
-		if (!repoRoot) return [];
-		return listRows(root).filter(
-			(r) => isAgentBusy(r) && r.meta.writeCapable && r.meta.worktreeMode !== "worktree" && r.meta.repoRoot === repoRoot,
-		);
 	}
 
 	/** @param {string} a @param {string} b */
@@ -346,8 +358,8 @@ export function createService(opts) {
 		root,
 		/**
 		 * Create a new background session and launch its first run.
-		 * Enforces worktree isolation for same-repo parallel writers (locked decision):
-		 * if another non-isolated writer is already active in this repo, we require a worktree.
+		 * Worktree mode is currently disabled, but the dashboard no longer blocks
+		 * concurrent same-repo sessions on its own.
 		 * @param {string} text
 		 * @param {{
 		 *   cwd?: string,
@@ -356,7 +368,7 @@ export function createService(opts) {
 		 *   model?: string|null,
 		 *   thinkingLevel?: "off"|"minimal"|"low"|"medium"|"high"|"xhigh"|null,
 		 * }} [dispatchOpts]
-		 * @returns {{ ok: boolean, viewId?: string, error?: string, usedWorktree?: boolean, hostMode?: "pty"|"json-runner", fallbackReason?: string }}
+		 * @returns {{ ok: boolean, viewId?: string, error?: string, hostMode?: "pty"|"json-runner", fallbackReason?: string }}
 		 */
 		dispatch(text, dispatchOpts = {}) {
 			const prompt = String(text || "").trim();
@@ -368,40 +380,19 @@ export function createService(opts) {
 			const defaultThinking = dispatchOpts.thinkingLevel ?? null;
 			const repoRoot = gitRepoRoot(cwd);
 
-			let worktree = Boolean(dispatchOpts.worktree);
-			if (writeCapable && !worktree && activeWritersInRepo(repoRoot).length > 0) {
-				if (!repoRoot) {
-					return {
-						ok: false,
-						error: "Another writer is active here and this isn't a git repo — can't isolate. Stop it first.",
-					};
-				}
-				worktree = true; // force isolation per the locked same-repo rule
+			if (dispatchOpts.worktree) {
+				return { ok: false, error: "Worktree mode is currently disabled." };
 			}
 
 			const id = newViewId();
-			let runCwd = cwd;
-			/** @type {import("../core/types.mjs").WorktreeMode} */
-			let worktreeMode = "off";
-			let worktreePathValue = null;
-
-			if (worktree && repoRoot) {
-				const wt = P.worktreePath(root, id);
-				const res = addWorktree(repoRoot, wt, worktreeBranch(id));
-				if (!res.ok) return { ok: false, error: `Worktree failed: ${res.error}` };
-				runCwd = wt;
-				worktreeMode = "worktree";
-				worktreePathValue = wt;
-			}
-
 			const meta = createView(root, {
 				id,
 				name: slugifyTask(prompt),
-				cwd: runCwd,
+				cwd,
 				repoCwd: cwd,
 				repoRoot,
-				worktreeMode,
-				worktreePath: worktreePathValue,
+				worktreeMode: "off",
+				worktreePath: null,
 				defaultModel,
 				defaultThinking,
 				writeCapable,
@@ -409,12 +400,12 @@ export function createService(opts) {
 			const pty = ptyHostAvailability();
 			if (pty.ok) launchHost(meta, prompt);
 			else launchForView(meta, prompt, "dispatch");
+			queueGeneratedTitle(meta, prompt);
 			return {
 				ok: true,
 				viewId: id,
-				usedWorktree: worktreeMode === "worktree",
 				hostMode: pty.ok ? "pty" : "json-runner",
-				fallbackReason: pty.ok ? undefined : pty.reason,
+				fallbackReason: pty.ok ? undefined : nodePtyFallbackMessage(pty),
 			};
 		},
 
@@ -434,7 +425,7 @@ export function createService(opts) {
 			const pty = ptyHostAvailability();
 			if (pty.ok) launchHost(row.meta, prompt);
 			else launchForView(row.meta, prompt, "reply");
-			return { ok: true, hostMode: pty.ok ? "pty" : "json-runner", fallbackReason: pty.ok ? undefined : pty.reason };
+			return { ok: true, hostMode: pty.ok ? "pty" : "json-runner", fallbackReason: pty.ok ? undefined : nodePtyFallbackMessage(pty) };
 		},
 
 		/**
@@ -472,7 +463,7 @@ export function createService(opts) {
 			if (row.hostAlive && row.host?.socketPath) return { ok: true, socketPath: row.host.socketPath, started: false };
 
 			const pty = ptyHostAvailability();
-			if (!pty.ok) return { ok: false, error: "PTY unavailable", fallbackReason: pty.reason };
+			if (!pty.ok) return { ok: false, error: "PTY unavailable", fallbackReason: nodePtyFallbackMessage(pty) };
 			if (isAgentBusy(row)) return { ok: false, error: "A non-live background run is active for this session" };
 			if (!existsSync(row.meta.sessionFile)) return { ok: false, error: "Session file isn't ready yet" };
 
@@ -569,12 +560,11 @@ export function createService(opts) {
 
 		/**
 		 * Soft-delete a row: archive it (removed from the dashboard) but preserve the session
-		 * file. Optionally also remove its worktree (requires the caller's explicit confirm).
+		 * file.
 		 * @param {string} viewId
-		 * @param {{ removeWorktree?: boolean }} [archiveOpts]
 		 */
-		archive(viewId, archiveOpts = {}) {
-			return archiveView(viewId, archiveOpts);
+		archive(viewId) {
+			return archiveView(viewId);
 		},
 
 		/**
@@ -592,9 +582,7 @@ export function createService(opts) {
 					skipped += 1;
 					continue;
 				}
-				const res = archiveView(viewId, {
-					removeWorktree: row.meta.worktreeMode === "worktree" && !!row.meta.worktreePath,
-				});
+				const res = archiveView(viewId);
 				if (res.ok) archived += 1;
 				else skipped += 1;
 			}
@@ -684,6 +672,26 @@ export function createService(opts) {
 			return listRows(root);
 		},
 
+		/**
+		 * Live node-pty / PTY host health snapshot for dashboard chrome.
+		 * - `ok` reflects whether this process can currently launch PTY hosts.
+		 * - `staleHosts` counts rows whose last persisted host claimed `alive` but the
+		 *   runner pid is gone, which often explains attach prompts / degraded UX.
+		 */
+		ptyHealth() {
+			const support = ptyHostAvailability();
+			const rows = listRows(root);
+			const staleHosts = rows.filter((row) => row.host?.state === "alive" && !row.hostAlive).length;
+			const liveHosts = rows.filter((row) => row.hostAlive).length;
+			return {
+				ok: Boolean(support.ok),
+				reason: support.ok ? null : support.reason ?? "PTY unavailable",
+				issue: support.ok ? null : (support.issue ?? diagnoseNodePtyFailure(support.reason ?? null)),
+				staleHosts,
+				liveHosts,
+			};
+		},
+
 		/** @param {string} viewId @returns {import("../core/store.mjs").Row|null} */
 		row(viewId) {
 			return loadRow(root, viewId);
@@ -753,7 +761,7 @@ function envInt(name, fallback, min, max, legacyName) {
 function ptySpawnSupported() {
 	if (cachedPtySupport !== undefined) return cachedPtySupport;
 	try {
-		ensureNodePtySpawnHelperExecutable();
+		ensureNodePtySpawnHelperExecutable(requireForPty);
 		const pty = requireForPty("node-pty");
 		const proc = pty.spawn(process.execPath, ["-e", "process.exit(0)"], {
 			name: "xterm-256color",
@@ -766,19 +774,8 @@ function ptySpawnSupported() {
 		cachedPtySupport = { ok: true };
 	} catch (err) {
 		cachedPtySupport = { ok: false, reason: err instanceof Error ? err.message : String(err) };
+		cachedPtySupport.issue = diagnoseNodePtyFailure(cachedPtySupport.reason, { probe: probeNodePtyEnvironment(requireForPty) });
 	}
 	return cachedPtySupport;
 }
 
-function ensureNodePtySpawnHelperExecutable() {
-	try {
-		const pkg = requireForPty.resolve("node-pty/package.json");
-		const root = pkg.slice(0, -"package.json".length);
-		for (const rel of [`prebuilds/${process.platform}-${process.arch}/spawn-helper`, "build/Release/spawn-helper"]) {
-			const helper = root + rel;
-			if (existsSync(helper)) chmodSync(helper, 0o755);
-		}
-	} catch {
-		/* node-pty optional/unavailable */
-	}
-}

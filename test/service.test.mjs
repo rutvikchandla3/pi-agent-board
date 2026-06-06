@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +12,21 @@ function freshRoot() {
 	return mkdtempSync(join(tmpdir(), "agentview-service-"));
 }
 
+function gitAvailable() {
+	try {
+		execFileSync("git", ["--version"], { stdio: "ignore" });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function initRepo(dir) {
+	execFileSync("git", ["-C", dir, "init", "-q"], { stdio: "ignore" });
+	execFileSync("git", ["-C", dir, "config", "user.email", "t@t.dev"], { stdio: "ignore" });
+	execFileSync("git", ["-C", dir, "config", "user.name", "t"], { stdio: "ignore" });
+}
+
 function service(root, overrides = {}) {
 	return createService({
 		root,
@@ -19,6 +35,8 @@ function service(root, overrides = {}) {
 		piArgsPrefix: [],
 		defaultCwd: process.cwd(),
 		launch: () => ({ pid: null, configPath: "/no/config.json" }),
+		launchHost: () => ({ pid: null, configPath: "/no/host-config.json" }),
+		launchTitle: () => ({ pid: null, configPath: "/no/title-config.json" }),
 		...overrides,
 	});
 }
@@ -118,6 +136,28 @@ test("attachTarget uses any live PTY host for fast attach", () => {
 	}
 });
 
+test("dispatch schedules detached GPT title generation", () => {
+	const root = freshRoot();
+	let titled = null;
+	try {
+		const svc = service(root, {
+			titleRunnerScript: "/no/title-runner.mjs",
+			launchTitle: (_root, config) => {
+				titled = config;
+				return { pid: null, configPath: "/no/title-config.json" };
+			},
+		});
+		const res = svc.dispatch("fix websocket reconnect bug", { cwd: "/tmp/project-a" });
+		assert.equal(res.ok, true);
+		assert.equal(titled.prompt, "fix websocket reconnect bug");
+		assert.equal(titled.viewId, res.viewId);
+		assert.equal(titled.fallbackName, "fix-websocket-reconnect-bug");
+		assert.equal(titled.cwd, "/tmp/project-a");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("dispatch carries cwd, model, and thinking into the hosted session config", () => {
 	const root = freshRoot();
 	const oldForce = process.env.AGENT_BOARD_FORCE_PTY;
@@ -147,6 +187,50 @@ test("dispatch carries cwd, model, and thinking into the hosted session config",
 		if (oldForce === undefined) delete process.env.AGENT_BOARD_FORCE_PTY;
 		else process.env.AGENT_BOARD_FORCE_PTY = oldForce;
 		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("dispatch rejects explicit worktree requests", { skip: !gitAvailable() }, () => {
+	const root = freshRoot();
+	const repo = freshRoot();
+	try {
+		initRepo(repo);
+		const res = service(root).dispatch("ship it", { cwd: repo, worktree: true });
+		assert.deepEqual(res, { ok: false, error: "Worktree mode is currently disabled." });
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("dispatch allows a second active session in the same repo", { skip: !gitAvailable() }, () => {
+	const root = freshRoot();
+	const repo = freshRoot();
+	try {
+		initRepo(repo);
+		const svc = service(root);
+		const first = svc.dispatch("first", { cwd: repo });
+		assert.equal(first.ok, true);
+		const second = svc.dispatch("second", { cwd: repo });
+		assert.equal(second.ok, true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("dispatch allows a second active session in the same non-git folder", () => {
+	const root = freshRoot();
+	const folder = freshRoot();
+	try {
+		const svc = service(root);
+		const first = svc.dispatch("first", { cwd: folder });
+		assert.equal(first.ok, true);
+		const second = svc.dispatch("second", { cwd: folder });
+		assert.equal(second.ok, true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(folder, { recursive: true, force: true });
 	}
 });
 

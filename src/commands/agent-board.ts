@@ -18,6 +18,7 @@ export interface AgentBoardCommandOptions {
 	root: string;
 	runnerScript: string;
 	ptyRunnerScript?: string;
+	titleRunnerScript?: string;
 	piCommand: string;
 	piArgsPrefix: string[];
 	getThinkingLevel: () => "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -35,6 +36,7 @@ export function registerAgentBoardCommand(pi: ExtensionAPI, opts: AgentBoardComm
 				root: opts.root,
 				runnerScript: opts.runnerScript,
 				ptyRunnerScript: opts.ptyRunnerScript,
+				titleRunnerScript: opts.titleRunnerScript,
 				piCommand: opts.piCommand,
 				piArgsPrefix: opts.piArgsPrefix,
 				defaultCwd: ctx.cwd,

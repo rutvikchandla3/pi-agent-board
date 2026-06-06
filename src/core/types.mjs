@@ -85,7 +85,7 @@ export const GROUP_LABELS = {
  * @property {string|null} question
  * @property {string|null} error
  * @property {number|null} lastVisitedAt
- * @property {number|null} lastAgentActivityAt
+ * @property {number|null} lastAgentActivityAt Timestamp of the latest assistant reply shown in the row.
  */
 
 /**
@@ -130,7 +130,7 @@ export const GROUP_LABELS = {
  * @property {string} latestAssistantPreview
  * @property {string|null} question
  * @property {string|null} error
- * @property {number|null} lastAgentActivityAt
+ * @property {number|null} lastAgentActivityAt Timestamp of the latest assistant reply.
  * @property {string|null} stopReason
  * @property {boolean} stoppedByUser
  * @property {number} turns
@@ -171,6 +171,19 @@ export const GROUP_LABELS = {
  * @property {Record<string,string>} env
  * @property {number} cols
  * @property {number} rows
+ */
+
+/**
+ * Configuration handed to the detached title runner (written as `title-config.json`).
+ * @typedef {Object} TitleConfig
+ * @property {string} root
+ * @property {string} viewId
+ * @property {string} cwd
+ * @property {string} prompt
+ * @property {string} fallbackName
+ * @property {string} piCommand
+ * @property {string[]} piArgsPrefix
+ * @property {string|null} model
  */
 
 /** Roster index (`roster.json`). @typedef {Object} Roster @property {number} version @property {string[]} views */
