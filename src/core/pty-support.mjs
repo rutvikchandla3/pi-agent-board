@@ -30,6 +30,10 @@ export function nodePtySpawnHelperPaths(requireForPty, platform = process.platfo
 /**
  * Best-effort chmod for node-pty's spawn-helper. This specifically heals the macOS/npm
  * packaging issue where the helper lands as 0644 instead of 0755.
+ *
+ * Important: this must never create a false PTY failure for an already-working install.
+ * If the helper already has an execute bit, leave it alone. If chmod itself fails because
+ * the install directory is read-only, swallow that and let the real node-pty probe decide.
  * @param {import("node:module").Require} requireForPty
  * @param {string} [platform]
  * @param {string} [arch]
@@ -39,8 +43,17 @@ export function ensureNodePtySpawnHelperExecutable(requireForPty, platform = pro
 	const touched = [];
 	for (const helper of nodePtySpawnHelperPaths(requireForPty, platform, arch)) {
 		if (!existsSync(helper)) continue;
-		chmodSync(helper, 0o755);
-		touched.push(helper);
+		try {
+			if (Boolean(statSync(helper).mode & 0o111)) continue;
+		} catch {
+			continue;
+		}
+		try {
+			chmodSync(helper, 0o755);
+			touched.push(helper);
+		} catch {
+			/* best effort: a read-only install should not disable PTY if the helper already works */
+		}
 	}
 	return touched;
 }
@@ -50,6 +63,34 @@ const RESOLVE_HELPER_COMMAND =
 const VERIFY_COMMAND =
 	`node -e "const p=require('node-pty').spawn('/bin/echo',['ok'],{name:'xterm-256color',cols:20,rows:5,cwd:process.cwd(),env:process.env}); console.log('node-pty OK'); p.kill()"`;
 const TEMP_WORKAROUND = "AGENT_BOARD_DISABLE_PTY=1 pi /agent-board";
+
+/** @param {string} value */
+function shellQuote(value) {
+	return `'${String(value).replace(/'/g, `'"'"'`)}'`;
+}
+
+/** @param {string|null|undefined} helperPath @param {string} [label] */
+function helperPathSteps(helperPath, label = "Detected helper path") {
+	if (!helperPath) return ["Resolve the helper path:", RESOLVE_HELPER_COMMAND];
+	return [`${label}:`, helperPath];
+}
+
+/** @param {string|null|undefined} helperPath */
+function chmodHelperCommand(helperPath) {
+	return helperPath ? `chmod +x ${shellQuote(helperPath)}` : `chmod +x "$helper"`;
+}
+
+/** @param {string|null|undefined} helperPath */
+function quarantineHelperCommand(helperPath) {
+	return helperPath ? `xattr -dr com.apple.quarantine ${shellQuote(helperPath)}` : `xattr -dr com.apple.quarantine "$helper"`;
+}
+
+/** @param {string|null|undefined} helperPath */
+function quarantineHelperCommandBestEffort(helperPath) {
+	return helperPath
+		? `xattr -dr com.apple.quarantine ${shellQuote(helperPath)} 2>/dev/null || true`
+		: `xattr -dr com.apple.quarantine "$helper" 2>/dev/null || true`;
+}
 
 /**
  * @typedef {Object} PtyProbe
@@ -120,6 +161,7 @@ export function diagnoseNodePtyFailure(reason, opts = {}) {
 	const platform = opts.platform ?? process.platform;
 	const arch = opts.arch ?? process.arch;
 	const probe = opts.probe ?? null;
+	const helperPath = probe?.helperPath ?? null;
 	const rawReason = cleanReason(reason) || "unknown error";
 
 	if (/AGENT_BOARD_DISABLE_PTY=1|AGENT_VIEW_DISABLE_PTY=1/.test(rawReason)) {
@@ -128,8 +170,8 @@ export function diagnoseNodePtyFailure(reason, opts = {}) {
 			title: "PTY disabled by environment",
 			statusLabel: "disabled by env",
 			summary: "Live PTY is disabled because AGENT_BOARD_DISABLE_PTY=1 is set.",
-			fixHint: "Unset AGENT_BOARD_DISABLE_PTY and restart Pi.",
-			steps: ["Unset the env override.", "Restart Pi and reopen /agent-board."],
+			fixHint: "Unset AGENT_BOARD_DISABLE_PTY and retry Agent Board.",
+			steps: ["Unset the env override.", "Retry /agent-board or attach again."],
 			rawReason,
 		};
 	}
@@ -150,6 +192,23 @@ export function diagnoseNodePtyFailure(reason, opts = {}) {
 		};
 	}
 
+	if (/(Could not locate the bindings file|No native build was found|Cannot find module ['\"].*pty\.node['\"]|No prebuilds found)/i.test(rawReason)) {
+		return {
+			id: "native-missing",
+			title: "node-pty native binary missing",
+			statusLabel: "native binary missing",
+			summary: "Live PTY is disabled because node-pty is installed but its native binary is missing for this runtime.",
+			fixHint: `Reinstall or rebuild node-pty under the same Node version and architecture (${platform}-${arch}) that Pi is using.`,
+			steps: [
+				`Confirm runtime: node -p \"process.version + ' ' + process.platform + ' ' + process.arch\"`,
+				"Reinstall dependencies or rebuild native modules under that same runtime.",
+				"For source installs, run npm rebuild node-pty (or npm install) in the package directory.",
+				`Temporary workaround: ${TEMP_WORKAROUND}`,
+			],
+			rawReason,
+		};
+	}
+
 	if (
 		platform === "darwin" &&
 		/(posix_spawnp failed|spawn-helper|permission denied|operation not permitted|eacces|eperm)/i.test(rawReason)
@@ -162,6 +221,7 @@ export function diagnoseNodePtyFailure(reason, opts = {}) {
 				summary: "Live PTY is disabled because node-pty's macOS spawn-helper file is missing.",
 				fixHint: "Reinstall the package so the darwin helper is restored.",
 				steps: [
+					...helperPathSteps(helperPath, "Expected helper path"),
 					"Reinstall agent-board or run npm install again so node-pty's darwin prebuilds are present.",
 					`Temporary workaround: ${TEMP_WORKAROUND}`,
 				],
@@ -176,10 +236,9 @@ export function diagnoseNodePtyFailure(reason, opts = {}) {
 				summary: "Live PTY is disabled because node-pty's spawn-helper does not have execute permission.",
 				fixHint: "Run chmod +x on spawn-helper.",
 				steps: [
-					"Resolve the helper path:",
-					RESOLVE_HELPER_COMMAND,
+					...helperPathSteps(helperPath),
 					"Grant execute permission:",
-					`chmod +x \"$helper\"`,
+					chmodHelperCommand(helperPath),
 					"Validate node-pty after the fix:",
 					VERIFY_COMMAND,
 					`Temporary workaround: ${TEMP_WORKAROUND}`,
@@ -195,10 +254,9 @@ export function diagnoseNodePtyFailure(reason, opts = {}) {
 				summary: "Live PTY is disabled because macOS Gatekeeper quarantined node-pty's spawn-helper.",
 				fixHint: "Clear the quarantine xattr from spawn-helper.",
 				steps: [
-					"Resolve the helper path:",
-					RESOLVE_HELPER_COMMAND,
+					...helperPathSteps(helperPath),
 					"Remove the quarantine attribute:",
-					`xattr -dr com.apple.quarantine \"$helper\"`,
+					quarantineHelperCommand(helperPath),
 					"Validate node-pty after the fix:",
 					VERIFY_COMMAND,
 					`Temporary workaround: ${TEMP_WORKAROUND}`,
@@ -213,11 +271,10 @@ export function diagnoseNodePtyFailure(reason, opts = {}) {
 			summary: "Live PTY is disabled because macOS could not execute node-pty's spawn-helper.",
 			fixHint: "Run chmod +x on spawn-helper and clear quarantine if needed.",
 			steps: [
-				"Resolve the helper path:",
-				RESOLVE_HELPER_COMMAND,
+				...helperPathSteps(helperPath),
 				"Fix permissions and quarantine:",
-				`chmod +x \"$helper\"`,
-				`xattr -dr com.apple.quarantine \"$helper\" 2>/dev/null || true`,
+				chmodHelperCommand(helperPath),
+				quarantineHelperCommandBestEffort(helperPath),
 				"Validate node-pty after the fix:",
 				VERIFY_COMMAND,
 				`Temporary workaround: ${TEMP_WORKAROUND}`,

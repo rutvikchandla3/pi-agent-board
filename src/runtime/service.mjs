@@ -45,6 +45,7 @@ import { diagnoseNodePtyFailure, ensureNodePtySpawnHelperExecutable, nodePtyFall
  *   launch?: typeof launchRun,
  *   launchHost?: typeof launchHostProcess,
  *   launchTitle?: typeof launchTitleProcess,
+ *   ptySupport?: (opts?: { refresh?: boolean, maxAgeMs?: number }) => { ok: boolean, reason?: string|null, issue?: any },
  * }} opts
  */
 export function createService(opts) {
@@ -52,6 +53,7 @@ export function createService(opts) {
 	const launch = opts.launch ?? launchRun;
 	const launchHostImpl = opts.launchHost ?? launchHostProcess;
 	const launchTitleImpl = opts.launchTitle ?? launchTitleProcess;
+	const ptySupport = opts.ptySupport ?? ptyHostAvailability;
 	const ptyRunnerScript = opts.ptyRunnerScript ?? opts.runnerScript;
 	const titleRunnerScript = opts.titleRunnerScript ?? null;
 
@@ -397,7 +399,7 @@ export function createService(opts) {
 				defaultThinking,
 				writeCapable,
 			});
-			const pty = ptyHostAvailability();
+			const pty = ptySupport({ refresh: true });
 			if (pty.ok) launchHost(meta, prompt);
 			else launchForView(meta, prompt, "dispatch");
 			queueGeneratedTitle(meta, prompt);
@@ -422,7 +424,7 @@ export function createService(opts) {
 			if (!row) return { ok: false, error: "Unknown session" };
 			if (row.hostAlive) return sendHostMessage(row, { type: "input", data: `${prompt}\r` });
 			if (row.alive) return { ok: false, error: "A run is already active for this session" };
-			const pty = ptyHostAvailability();
+			const pty = ptySupport({ refresh: true });
 			if (pty.ok) launchHost(row.meta, prompt);
 			else launchForView(row.meta, prompt, "reply");
 			return { ok: true, hostMode: pty.ok ? "pty" : "json-runner", fallbackReason: pty.ok ? undefined : nodePtyFallbackMessage(pty) };
@@ -462,7 +464,7 @@ export function createService(opts) {
 			if (!row) return { ok: false, error: "Unknown session" };
 			if (row.hostAlive && row.host?.socketPath) return { ok: true, socketPath: row.host.socketPath, started: false };
 
-			const pty = ptyHostAvailability();
+			const pty = ptySupport({ refresh: true });
 			if (!pty.ok) return { ok: false, error: "PTY unavailable", fallbackReason: nodePtyFallbackMessage(pty) };
 			if (isAgentBusy(row)) return { ok: false, error: "A non-live background run is active for this session" };
 			if (!existsSync(row.meta.sessionFile)) return { ok: false, error: "Session file isn't ready yet" };
@@ -679,7 +681,7 @@ export function createService(opts) {
 		 *   runner pid is gone, which often explains attach prompts / degraded UX.
 		 */
 		ptyHealth() {
-			const support = ptyHostAvailability();
+			const support = ptySupport();
 			const rows = listRows(root);
 			const staleHosts = rows.filter((row) => row.host?.state === "alive" && !row.hostAlive).length;
 			const liveHosts = rows.filter((row) => row.hostAlive).length;
@@ -743,11 +745,15 @@ function sendHostMessage(row, message) {
 
 let cachedPtySupport;
 const requireForPty = createRequire(import.meta.url);
+const PTY_SUPPORT_OK_TTL_MS = 30_000;
+const PTY_SUPPORT_ERROR_TTL_MS = 2_000;
 
-function ptyHostAvailability() {
-	if (process.env.AGENT_BOARD_DISABLE_PTY === "1" || process.env.AGENT_VIEW_DISABLE_PTY === "1") return { ok: false, reason: "AGENT_BOARD_DISABLE_PTY=1" };
+function ptyHostAvailability(opts = {}) {
+	if (process.env.AGENT_BOARD_DISABLE_PTY === "1" || process.env.AGENT_VIEW_DISABLE_PTY === "1") {
+		return { ok: false, reason: "AGENT_BOARD_DISABLE_PTY=1", issue: diagnoseNodePtyFailure("AGENT_BOARD_DISABLE_PTY=1") };
+	}
 	if (process.env.AGENT_BOARD_FORCE_PTY === "1" || process.env.AGENT_VIEW_FORCE_PTY === "1") return { ok: true };
-	return ptySpawnSupported();
+	return ptySpawnSupported(opts);
 }
 
 function envInt(name, fallback, min, max, legacyName) {
@@ -758,8 +764,10 @@ function envInt(name, fallback, min, max, legacyName) {
 	return Math.max(min, Math.min(max, Math.floor(n)));
 }
 
-function ptySpawnSupported() {
-	if (cachedPtySupport !== undefined) return cachedPtySupport;
+function ptySpawnSupported(opts = {}) {
+	const now = Date.now();
+	const ttlMs = opts.maxAgeMs ?? (cachedPtySupport?.ok ? PTY_SUPPORT_OK_TTL_MS : PTY_SUPPORT_ERROR_TTL_MS);
+	if (!opts.refresh && cachedPtySupport && now - (cachedPtySupport.checkedAt ?? 0) < ttlMs) return cachedPtySupport;
 	try {
 		ensureNodePtySpawnHelperExecutable(requireForPty);
 		const pty = requireForPty("node-pty");
@@ -771,9 +779,9 @@ function ptySpawnSupported() {
 			env: process.env,
 		});
 		proc.kill?.();
-		cachedPtySupport = { ok: true };
+		cachedPtySupport = { ok: true, checkedAt: now };
 	} catch (err) {
-		cachedPtySupport = { ok: false, reason: err instanceof Error ? err.message : String(err) };
+		cachedPtySupport = { ok: false, reason: err instanceof Error ? err.message : String(err), checkedAt: now };
 		cachedPtySupport.issue = diagnoseNodePtyFailure(cachedPtySupport.reason, { probe: probeNodePtyEnvironment(requireForPty) });
 	}
 	return cachedPtySupport;
