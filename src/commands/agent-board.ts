@@ -94,6 +94,7 @@ export async function openDashboard(
 					currentThinkingLevel: options.currentThinkingLevel ?? "off",
 				});
 				interval = setInterval(() => {
+					service.reconcile();
 					comp.refresh();
 					tui.requestRender(true);
 				}, POLL_MS);
@@ -118,7 +119,7 @@ export async function openDashboard(
 
 type AttachOutcome = { action: "detached" | "closed" | "switched" | "none" };
 
-async function dashboardAttachLoop(
+export async function dashboardAttachLoop(
 	ctx: ExtensionCommandContext,
 	service: ReturnType<typeof createService>,
 	root: string,

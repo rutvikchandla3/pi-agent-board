@@ -51,7 +51,8 @@ pi
 - **`/agent-board`** opens a full-screen dashboard, global across projects.
 - **`pi /agent-board`** starts directly in a cleaner dashboard-first UI (no normal Pi header/footer chrome) and quits Pi when you leave it.
 - **Dispatch** by typing in the bottom input and pressing `enter` → a **Start session** dialog opens with default focus on **Start session**; press `enter` again to launch, or change **cwd**, **model**, and **thinking** first. The dialog remembers your last launch defaults and prefers scoped models for the selected cwd when Pi settings define them.
-- **Live rows** grouped by stage: Queued · Running · Needs input · In Progress · Done · Failed · Stopped.
+- **Live rows** grouped by stage and folder/repo: Queued · Running · Needs input · In Progress · Done · Failed · Stopped, with each stage clustered by cwd so related sessions stay together.
+- **Automatic terminal-state classification:** when a turn finishes, Agent Board classifies the last assistant response into **Needs input**, **In Progress**, or **Done** using a cheap LLM pass with heuristic fallback, so obvious completed sessions move to Done without manual cleanup.
 - **GPT-generated session titles:** new sessions start with a fallback slug, then a detached `openai-codex/gpt-5.5` title pass at **low** thinking renames them to a concise 3–4 word label when provider auth is available.
 - **Peek** (`space`) a row for its summary, blocker/question, and latest output; **reply** (`r`) inline without attaching.
 - **Attach** (`enter` or `→` / `>`) to continue the full interactive Pi session (confirms + interrupts if it's still running). The live PTY surface supports clickable links plus drag/double-click copy; detach with `←`, `ctrl+]`, or `ctrl+g`.
@@ -113,4 +114,4 @@ npm run pack:dry
 npm run verify
 ```
 
-Config env: `AGENT_BOARD_ROOT` (store location), `AGENT_BOARD_SUMMARY_MODEL` (summary model; default `gpt-4o`, `off` to disable), `AGENT_BOARD_TITLE_MODEL` (session title model; default `openai-codex/gpt-5.5`, `off` to disable), `AGENT_BOARD_TITLE_THINKING_LEVEL` (session title thinking level; default `low`), `AGENT_BOARD_DISABLE_PTY=1` / `AGENT_BOARD_FORCE_PTY=1` (override PTY attach mode), `AGENT_BOARD_ATTACH_MOUSE=0` (fall back to terminal-native selection). Legacy `AGENT_VIEW_*` env vars are still honored for migration.
+Config env: `AGENT_BOARD_ROOT` (store location), `AGENT_BOARD_AUTO_STATE=off` (disable automatic terminal-state moves), `AGENT_BOARD_AUTO_STATE_MODEL` (auto-state classifier model; default `gpt-4o`, `off` for heuristic-only), `AGENT_BOARD_SUMMARY_MODEL` (summary model; default `gpt-4o`, `off` to disable), `AGENT_BOARD_TITLE_MODEL` (session title model; default `openai-codex/gpt-5.5`, `off` to disable), `AGENT_BOARD_TITLE_THINKING_LEVEL` (session title thinking level; default `low`), `AGENT_BOARD_DISABLE_PTY=1` / `AGENT_BOARD_FORCE_PTY=1` (override PTY attach mode), `AGENT_BOARD_ATTACH_MOUSE=0` (fall back to terminal-native selection). Legacy `AGENT_VIEW_*` env vars are still honored for migration.

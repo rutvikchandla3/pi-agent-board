@@ -35,6 +35,8 @@ export const hostConfigPath = (root, viewId) => path.join(viewDir(root, viewId),
 /** @param {string} root @param {string} viewId */
 export const titleConfigPath = (root, viewId) => path.join(viewDir(root, viewId), "title-config.json");
 /** @param {string} root @param {string} viewId */
+export const autoStateConfigPath = (root, viewId) => path.join(viewDir(root, viewId), "auto-state-config.json");
+/** @param {string} root @param {string} viewId */
 export const controlSocketPath = (root, viewId) => path.join(viewDir(root, viewId), "control.sock");
 /** @param {string} root @param {string} viewId */
 export const screenLogPath = (root, viewId) => path.join(viewDir(root, viewId), "screen.log");
@@ -54,6 +56,22 @@ export const stdoutPath = (root, viewId, runId) => path.join(runDir(root, viewId
 export const stderrPath = (root, viewId, runId) => path.join(runDir(root, viewId, runId), "stderr.log");
 /** @param {string} root @param {string} viewId @param {string} runId */
 export const pidPath = (root, viewId, runId) => path.join(runDir(root, viewId, runId), "pid.json");
+/** @param {string} root @param {string} viewId */
+export const diagnosticsPath = (root, viewId) => path.join(viewDir(root, viewId), "diagnostics.jsonl");
+/** @param {string} root @param {string} viewId */
+export const evidencePath = (root, viewId) => path.join(viewDir(root, viewId), "evidence.json");
+/** @param {string} root @param {string} viewId */
+export const viewEvidencePath = evidencePath;
+/** @param {string} root @param {string} viewId */
+export const followUpQueuePath = (root, viewId) => path.join(viewDir(root, viewId), "queue.json");
+/** @param {string} root @param {string} viewId */
+export const queuePath = followUpQueuePath;
+/** @param {string} root @param {string} viewId */
+export const steeringPath = (root, viewId) => path.join(viewDir(root, viewId), "steering.json");
+/** @param {string} root @param {string} viewId @param {string} name */
+export const viewLockPath = (root, viewId, name) => path.join(viewDir(root, viewId), `${name}.lock`);
+/** @param {string} root @param {string} viewId @param {string} runId */
+export const runEvidencePath = (root, viewId, runId) => path.join(runDir(root, viewId, runId), "evidence.json");
 
 /** @param {string} root */
 export const sessionsDir = (root) => path.join(root, "sessions");

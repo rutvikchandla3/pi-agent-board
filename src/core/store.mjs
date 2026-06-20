@@ -7,6 +7,10 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { atomicWriteJson, ensureDir, readJson } from "./atomic.mjs";
 import * as P from "./paths.mjs";
 import { isAlive } from "./pid.mjs";
+import { readDiagnosticSummary } from "./diagnostics.mjs";
+import { readEvidence, summarizeEvidence } from "./evidence.mjs";
+import { readFollowUpQueue, summarizeFollowUpQueue } from "./follow-up-queue.mjs";
+import { readSteering, summarizeSteering } from "./steering.mjs";
 
 /** @typedef {import("./types.mjs").Roster} Roster */
 /** @typedef {import("./types.mjs").ViewMeta} ViewMeta */
@@ -164,6 +168,10 @@ function mtime(dir) {
  * @property {boolean} alive  Whether the row's current run pid/foreground activity is alive.
  * @property {boolean} hostAlive Whether a PTY host/socket is alive and attachable.
  * @property {HostStatus|null} host
+ * @property {import("./types.mjs").ReviewSummary} [review]
+ * @property {import("./types.mjs").DiagnosticSummary} [diagnostics]
+ * @property {import("./types.mjs").FollowUpSummary} [followUps]
+ * @property {import("./types.mjs").SteeringSummary} [steering]
  */
 
 /** @param {string} root @param {string} viewId @returns {Row|null} */
@@ -171,19 +179,30 @@ export function loadRow(root, viewId) {
 	const meta = readMeta(root, viewId);
 	if (!meta) return null;
 	const state = readState(root, viewId);
+	const summaries = readViewArtifactSummaries(root, viewId);
+	const enrichedState = state ? { ...state, ...summaries } : state;
 	let alive = false;
-	if (state?.currentRunId) {
-		const pid = readPid(root, viewId, state.currentRunId);
+	if (enrichedState?.currentRunId) {
+		const pid = readPid(root, viewId, enrichedState.currentRunId);
 		alive = isAlive(pid);
 	}
 	// A managed session can also be active in the foreground after the user attaches
 	// and types a follow-up. In that path there is no detached runner pid for us to
 	// poll, but foreground extension events mirror processState into state.json.
-	if (!alive && state?.processState === "alive") alive = true;
+	if (!alive && enrichedState?.processState === "alive") alive = true;
 	const host = readHost(root, viewId);
 	const hostPid = host?.runnerPid ?? readHostPid(root, viewId);
-	const hostAlive = Boolean(host && host.state === "alive" && isAlive(hostPid));
-	return { meta, state, alive, hostAlive, host };
+	const hostAlive = Boolean(host && (host.state === "alive" || host.state === "starting") && isAlive(hostPid));
+	return { meta, state: enrichedState, alive, hostAlive, host, ...summaries };
+}
+
+/** @param {string} root @param {string} viewId */
+export function readViewArtifactSummaries(root, viewId) {
+	const review = summarizeEvidence(readEvidence(root, viewId));
+	const diagnostics = readDiagnosticSummary(root, viewId);
+	const followUps = summarizeFollowUpQueue(readFollowUpQueue(root, viewId));
+	const steering = summarizeSteering(readSteering(root, viewId));
+	return { review, diagnostics, followUps, steering };
 }
 
 /**
@@ -217,6 +236,7 @@ export function listRows(root, opts = {}) {
  *   defaultModel?: string|null,
  *   defaultThinking?: "off"|"minimal"|"low"|"medium"|"high"|"xhigh"|null,
  *   writeCapable?: boolean,
+ *   sessionFile?: string,
  * }} opts
  * @returns {ViewMeta}
  */
@@ -231,7 +251,7 @@ export function createView(root, opts) {
 		cwd: opts.cwd,
 		repoCwd: opts.repoCwd ?? opts.cwd,
 		repoRoot: opts.repoRoot ?? null,
-		sessionFile: P.sessionFilePath(root, opts.id),
+		sessionFile: opts.sessionFile ?? P.sessionFilePath(root, opts.id),
 		createdAt: now,
 		updatedAt: now,
 		pinned: false,
@@ -264,6 +284,7 @@ export function createView(root, opts) {
 		error: null,
 		lastVisitedAt: null,
 		lastAgentActivityAt: null,
+		autoState: null,
 	};
 	writeState(root, state);
 	addToRoster(root, meta.id);

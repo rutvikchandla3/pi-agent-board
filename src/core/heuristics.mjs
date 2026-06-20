@@ -109,7 +109,7 @@ export function firstSentence(text) {
 	return sentences[0] ?? "";
 }
 
-const PATH_KEYS = ["file_path", "path", "filePath", "file"];
+const PATH_KEYS = ["file_path", "path", "filePath", "file", "filename"];
 
 /**
  * Best-effort target path from a tool call's arguments.
@@ -150,14 +150,52 @@ export function toolSummary(name, args) {
 		case "bash": {
 			const cmd = typeof args?.command === "string" ? args.command.trim() : "";
 			if (!cmd) return "Running command";
-			if (/\b(test|vitest|jest|pytest|go test|cargo test)\b/.test(cmd)) return "Running tests";
-			if (/\b(build|tsc|webpack|vite build|make)\b/.test(cmd)) return "Building";
-			if (/^git\b/.test(cmd)) return `git ${cmd.replace(/^git\s+/, "").split(/\s+/)[0] ?? ""}`.trim();
+			const kind = classifyCommand(cmd);
+			if (kind === "test") return "Running tests";
+			if (kind === "build") return "Building";
+			if (kind === "lint") return "Linting";
+			if (kind === "git") return `git ${cmd.replace(/^git\s+/, "").split(/\s+/)[0] ?? ""}`.trim();
 			return `Running ${truncate(cmd, 32)}`;
 		}
 		default:
 			return base ? `${capitalize(name)} ${base}` : capitalize(name);
 	}
+}
+
+/**
+ * Classify a shell command for review evidence.
+ * @param {string} command
+ * @returns {"test"|"build"|"lint"|"git"|"install"|"other"}
+ */
+export function classifyCommand(command) {
+	const cmd = String(command || "").trim();
+	if (!cmd) return "other";
+	if (/\b(test|vitest|jest|pytest|go test|cargo test|npm test|pnpm test|yarn test)\b/.test(cmd)) return "test";
+	if (/\b(build|tsc|webpack|vite build|make|cargo build|go build)\b/.test(cmd)) return "build";
+	if (/\b(lint|eslint|biome|ruff|clippy)\b/.test(cmd)) return "lint";
+	if (/^(git|gh)\b/.test(cmd)) return "git";
+	if (/\b(npm install|npm ci|pnpm install|yarn install|bun install)\b/.test(cmd)) return "install";
+	return "other";
+}
+
+/** @param {string} command @param {number} [n] */
+export function commandPreview(command, n = 120) {
+	return truncate(String(command || "").replace(/\s+/g, " ").trim(), n);
+}
+
+/**
+ * Detect file mutation operations from tool name/args.
+ * @param {string} name
+ * @param {Record<string,any>} args
+ * @returns {{ path:string, action:"edited"|"written"|"deleted"|"unknown" }|null}
+ */
+export function toolFileOperation(name, args) {
+	const p = toolPath(args);
+	if (!p) return null;
+	if (["edit", "multi_edit", "apply_patch"].includes(name)) return { path: p, action: "edited" };
+	if (["write", "create_file"].includes(name)) return { path: p, action: "written" };
+	if (["delete", "rm", "remove_file"].includes(name)) return { path: p, action: "deleted" };
+	return null;
 }
 
 /** @param {string} p */

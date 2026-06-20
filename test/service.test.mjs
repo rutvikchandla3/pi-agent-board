@@ -344,9 +344,10 @@ test("syncForegroundEvent finalizes attached foreground turn from assistant outp
 		svc.syncForegroundEvent(meta.sessionFile, { type: "agent_end" });
 
 		const next = readState(root, "v1");
-		assert.equal(next.semanticState, "idle");
+		assert.equal(next.semanticState, "completed");
 		assert.equal(next.processState, "exited");
 		assert.equal(next.latestAssistantPreview, "All done.");
+		assert.equal(next.autoState?.kind, "done");
 		assert.equal(svc.row("v1").alive, false);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
@@ -443,6 +444,244 @@ test("archiveMany archives explicit completed rows and skips live ones", () => {
 
 		assert.deepEqual(service(root).archiveMany(["done1", "done2", "live1"]), { ok: true, archived: 2, skipped: 1 });
 		assert.deepEqual(service(root).rows().map((r) => r.meta.id), ["live1"]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("busy replies queue and drain when idle", () => {
+	const root = freshRoot();
+	try {
+		createView(root, { id: "v1", name: "a", cwd: "/r" });
+		const st = readState(root, "v1");
+		st.semanticState = "working";
+		st.processState = "alive";
+		writeState(root, st);
+		const launched = [];
+		const svc = service(root, {
+			ptySupport: () => ({ ok: false, reason: "test" }),
+			launch: (_root, config) => {
+				launched.push(config);
+				return { pid: null, configPath: "/no/config.json" };
+			},
+		});
+		const queued = svc.reply("v1", "next step");
+		assert.equal(queued.ok, true);
+		assert.equal(queued.queued, true);
+		assert.equal(svc.followUps("v1").summary.queuedCount, 1);
+
+		const idle = readState(root, "v1");
+		idle.semanticState = "idle";
+		idle.processState = "exited";
+		writeState(root, idle);
+		const drained = svc.drainNextFollowUp("v1");
+		assert.equal(drained.ok, true);
+		assert.equal(launched.length, 1);
+		assert.equal(launched[0].prompt, "next step");
+		assert.equal(svc.followUps("v1").summary.queuedCount, 0);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("adoptSession creates and reuses rows for an existing session file", () => {
+	const root = freshRoot();
+	try {
+		const sessionFile = join(root, "current.jsonl");
+		const svc = service(root);
+		const first = svc.adoptSession({ sessionFile, cwd: "/r", name: "current" });
+		assert.equal(first.ok, true);
+		assert.equal(first.reused, false);
+		const second = svc.adoptSession({ sessionFile, cwd: "/r", name: "current renamed" });
+		assert.equal(second.ok, true);
+		assert.equal(second.reused, true);
+		assert.equal(second.viewId, first.viewId);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("reconcile does not drain queued follow-ups after failed terminal state", () => {
+	const root = freshRoot();
+	try {
+		createView(root, { id: "v1", name: "a", cwd: "/r" });
+		const st = readState(root, "v1");
+		st.semanticState = "failed";
+		st.processState = "exited";
+		writeState(root, st);
+		const launched = [];
+		const svc = service(root, {
+			ptySupport: () => ({ ok: false, reason: "test" }),
+			launch: (_root, config) => {
+				launched.push(config);
+				return { pid: null, configPath: "/no/config.json" };
+			},
+		});
+		svc.queueFollowUp("v1", "should wait");
+		svc.reconcile();
+		assert.equal(launched.length, 0);
+		assert.equal(svc.followUps("v1").summary.queuedCount, 1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("busy steering actions queue raw steering payloads", () => {
+	const root = freshRoot();
+	try {
+		createView(root, { id: "v1", name: "a", cwd: "/r" });
+		const st = readState(root, "v1");
+		st.semanticState = "working";
+		st.processState = "alive";
+		writeState(root, st);
+		const svc = service(root);
+		const res = svc.requestPlan("v1", "make a plan");
+		assert.equal(res.ok, true);
+		const queue = svc.followUps("v1").queue;
+		assert.equal(queue.items[0].kind, "plan_request");
+		assert.equal(queue.items[0].text, "make a plan");
+		assert.doesNotMatch(queue.items[0].text, /Create an implementation plan only/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("idle non-PTY plan request launches with plan run kind", () => {
+	const root = freshRoot();
+	try {
+		createView(root, { id: "v1", name: "a", cwd: "/r" });
+		const st = readState(root, "v1");
+		st.semanticState = "idle";
+		st.processState = "exited";
+		writeState(root, st);
+		const launched = [];
+		const svc = service(root, {
+			ptySupport: () => ({ ok: false, reason: "test" }),
+			launch: (_root, config) => {
+				launched.push(config);
+				return { pid: null, configPath: "/no/config.json" };
+			},
+		});
+		const res = svc.requestPlan("v1", "make a plan");
+		assert.equal(res.ok, true);
+		assert.equal(launched.length, 1);
+		assert.equal(launched[0].kind, "plan");
+		assert.match(launched[0].prompt, /Create an implementation plan only/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("adoptSession resets reused inactive failed row to idle so queued bg prompts can drain", () => {
+	const root = freshRoot();
+	try {
+		const sessionFile = join(root, "current.jsonl");
+		const svc = service(root);
+		const first = svc.adoptSession({ sessionFile, cwd: "/r", name: "current" });
+		const state = readState(root, first.viewId);
+		state.semanticState = "failed";
+		state.processState = "exited";
+		state.hasError = true;
+		state.error = "old failure";
+		writeState(root, state);
+		const reused = svc.adoptSession({ sessionFile, cwd: "/r", name: "current" });
+		assert.equal(reused.reused, true);
+		const next = readState(root, first.viewId);
+		assert.equal(next.semanticState, "idle");
+		assert.equal(next.hasError, false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("reconcile finalizes host-backed row when PTY host exits without agent_end", () => {
+	const root = freshRoot();
+	try {
+		createView(root, { id: "v1", name: "a", cwd: "/r" });
+		const st = readState(root, "v1");
+		st.semanticState = "queued";
+		st.processState = "alive";
+		st.currentRunId = null;
+		writeState(root, st);
+		writeHost(root, {
+			version: 1,
+			viewId: "v1",
+			mode: "pty",
+			runnerPid: null,
+			childPid: null,
+			socketPath: P.controlSocketPath(root, "v1"),
+			state: "exited",
+			startedAt: 1,
+			lastSeenAt: 2,
+			endedAt: 3,
+			exitCode: 0,
+			error: null,
+			cols: 80,
+			rows: 24,
+			attachedClients: 0,
+		});
+		const fixed = service(root).reconcile();
+		assert.equal(fixed, 1);
+		const next = readState(root, "v1");
+		assert.equal(next.semanticState, "idle");
+		assert.equal(next.processState, "exited");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("adopted external session does not fall back to JSON runner when PTY is unavailable", () => {
+	const root = freshRoot();
+	try {
+		const sessionFile = join(root, "external-current.jsonl");
+		const launched = [];
+		const svc = service(root, {
+			ptySupport: () => ({ ok: false, reason: "test" }),
+			launch: (_root, config) => {
+				launched.push(config);
+				return { pid: null, configPath: "/no/config.json" };
+			},
+		});
+		const adopted = svc.adoptSession({ sessionFile, cwd: "/r", name: "current" });
+		const res = svc.reply(adopted.viewId, "continue", { delivery: "now" });
+		assert.equal(res.ok, false);
+		assert.match(res.error, /PTY is required/);
+		assert.equal(launched.length, 0);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("reconcile finalizes stale starting/alive host snapshots", () => {
+	const root = freshRoot();
+	try {
+		createView(root, { id: "v1", name: "a", cwd: "/r" });
+		const st = readState(root, "v1");
+		st.semanticState = "working";
+		st.processState = "alive";
+		st.currentRunId = null;
+		writeState(root, st);
+		writeHost(root, {
+			version: 1,
+			viewId: "v1",
+			mode: "pty",
+			runnerPid: 99999999,
+			childPid: null,
+			socketPath: P.controlSocketPath(root, "v1"),
+			state: "alive",
+			startedAt: 1,
+			lastSeenAt: 2,
+			endedAt: null,
+			exitCode: null,
+			error: null,
+			cols: 80,
+			rows: 24,
+			attachedClients: 0,
+		});
+		assert.equal(service(root).reconcile(), 1);
+		const next = readState(root, "v1");
+		assert.equal(next.semanticState, "failed");
+		assert.equal(next.processState, "exited");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

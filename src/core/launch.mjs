@@ -14,6 +14,7 @@ import { writePid } from "./store.mjs";
 /** @typedef {import("./types.mjs").RunConfig} RunConfig */
 /** @typedef {import("./types.mjs").HostConfig} HostConfig */
 /** @typedef {import("./types.mjs").TitleConfig} TitleConfig */
+/** @typedef {import("./types.mjs").AutoStateConfig} AutoStateConfig */
 
 /**
  * @param {string} root
@@ -76,6 +77,30 @@ export function launchHost(root, config, opts) {
  */
 export function launchTitle(root, config, opts) {
 	const configPath = P.titleConfigPath(root, config.viewId);
+	atomicWriteJson(configPath, config);
+
+	const node = opts.node ?? resolveNode();
+	const child = spawn(node, [opts.runnerScript, configPath], {
+		cwd: config.cwd,
+		detached: true,
+		stdio: "ignore",
+		env: process.env,
+	});
+	child.unref();
+
+	return { pid: child.pid ?? null, configPath };
+}
+
+/**
+ * Launch a detached auto-state classifier for a view. Best-effort: it may update
+ * state.json later with a model-refined terminal bucket.
+ * @param {string} root
+ * @param {AutoStateConfig} config
+ * @param {{ runnerScript: string, node?: string }} opts
+ * @returns {{ pid: number|null, configPath: string }}
+ */
+export function launchAutoState(root, config, opts) {
+	const configPath = P.autoStateConfigPath(root, config.viewId);
 	atomicWriteJson(configPath, config);
 
 	const node = opts.node ?? resolveNode();
