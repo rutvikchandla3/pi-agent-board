@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { filterRows, groupRows, parseFilter, rowState, rowView, stateGlyph } from "../src/core/rows.mjs";
+import { filterRows, groupRows, groupRowsByFolder, parseFilter, rowState, rowView, stateGlyph } from "../src/core/rows.mjs";
 
 /** @returns {import("../src/core/store.mjs").Row} */
 function row(id, semanticState, extra = {}) {
@@ -48,8 +48,25 @@ test("groupRows sorts pinned first then recent", () => {
 });
 
 test("rowView exposes folder place for dashboard rows", () => {
-	assert.equal(rowView(row("a", "working", { repoCwd: "/Users/me/project-a" }), 0).place, "project-a");
+	const view = rowView(row("a", "working", { repoCwd: "/Users/me/project-a" }), 0);
+	assert.equal(view.place, "project-a");
+	assert.equal(view.folderName, "project-a");
+	assert.equal(view.folderPath, "/Users/me/project-a");
 	assert.equal(rowView(row("b", "working", { repoCwd: "/Users/me/project-b", worktreeMode: "worktree" }), 0).place, "project-b⌥");
+});
+
+test("groupRowsByFolder nests rows by folder inside each stage", () => {
+	const rows = [
+		row("a", "working", { repoCwd: "/repo/r-code", lastActivityAt: 100 }),
+		row("b", "working", { repoCwd: "/repo/pi-agents-view", lastActivityAt: 300 }),
+		row("c", "working", { repoCwd: "/repo/r-code", lastActivityAt: 200 }),
+		row("d", "completed", { repoCwd: "/repo/r-code", lastActivityAt: 400 }),
+	];
+	const groups = groupRowsByFolder(rows, 1000);
+	assert.deepEqual(groups.map((g) => g.state), ["working", "completed"]);
+	assert.deepEqual(groups[0].folders.map((f) => f.name), ["pi-agents-view", "r-code"]);
+	assert.deepEqual(groups[0].folders[1].rows.map((r) => r.id), ["c", "a"]);
+	assert.equal(groups[1].folders[0].name, "r-code");
 });
 
 test("rowView normalizes generic status labels to current display names", () => {

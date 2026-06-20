@@ -20,9 +20,10 @@ import {
 	resolveLaunchContext,
 	supportedThinkingLevels,
 } from "../core/launch-options.mjs";
-import { filterRows, groupRows, rowState, stateGlyph } from "../core/rows.mjs";
+import { filterRows, groupRowsByFolder, rowState, stateGlyph } from "../core/rows.mjs";
 import { loadSessionView } from "../core/session-view.mjs";
 import { GROUP_LABELS } from "../core/types.mjs";
+import { buildEvidencePanel } from "./dashboard-evidence.mjs";
 import { readState, writeState, type Row } from "../core/store.mjs";
 import type { createService } from "../runtime/service.mjs";
 
@@ -59,7 +60,7 @@ type LaunchModel = {
 type LaunchChoice = { model: LaunchModel; thinkingLevel?: ThinkingLevel };
 type LaunchPicker = "cwd" | "model" | "thinking" | null;
 
-type Mode = "list" | "select" | "dispatch" | "filter" | "peek" | "reply" | "rename" | "confirm" | "help" | "ptyHelp" | "session" | "launch";
+type Mode = "list" | "select" | "dispatch" | "filter" | "peek" | "reply" | "rename" | "confirm" | "help" | "ptyHelp" | "session" | "evidence" | "launch";
 
 interface PendingConfirm {
 	prompt: string;
@@ -81,6 +82,7 @@ interface InputNotice {
 interface LaunchState {
 	fieldIndex: number;
 	picker: LaunchPicker;
+	action: "background" | "attach";
 	cwd: string;
 	cwdQuery: string;
 	cwdSuggestions: string[];
@@ -119,6 +121,7 @@ export class DashboardComponent implements Component {
 	private peekId: string | null = null;
 	private scrollTop = 0;
 	private sessionScrollTop = 0;
+	private evidenceScrollTop = 0;
 	private prewarmedId: string | null = null;
 	private flash: { text: string; level: FlashLevel } | null = null;
 	private inputNotice: InputNotice | null = null;
@@ -158,8 +161,8 @@ export class DashboardComponent implements Component {
 		const previousSelected = this.selectedId;
 		const all = this.deps.service.rows();
 		this.rows = this.filterQuery ? filterRows(all, this.filterQuery) : all;
-		const groups = groupRows(this.rows, Date.now());
-		this.orderedIds = groups.flatMap((g) => g.rows.map((r) => r.id));
+		const groups = groupRowsByFolder(this.rows, Date.now());
+		this.orderedIds = groups.flatMap((g) => g.folders.flatMap((f) => f.rows.map((r) => r.id)));
 		const visibleIds = new Set(this.orderedIds);
 		this.selectedIds = new Set([...this.selectedIds].filter((id) => visibleIds.has(id)));
 		if (this.orderedIds.length === 0) {
@@ -289,6 +292,9 @@ export class DashboardComponent implements Component {
 			case "session":
 				this.handleSessionKey(data);
 				break;
+			case "evidence":
+				this.handleEvidenceKey(data);
+				break;
 			case "launch":
 				this.handleLaunchKey(data);
 				break;
@@ -318,6 +324,7 @@ export class DashboardComponent implements Component {
 		if (matchesKey(data, Key.down)) return void this.moveSelection(1);
 		if (matchesKey(data, Key.right) || data === ">") return this.attachSelected();
 		if (data === "v") return this.openSessionView();
+		if (data === "e") return this.openEvidenceView();
 		if (matchesKey(data, Key.enter)) {
 			if (this.input.trim()) return this.openLaunchDialog();
 			return this.attachSelected();
@@ -387,6 +394,7 @@ export class DashboardComponent implements Component {
 			return;
 		}
 		if (matchesKey(data, Key.enter) || data === "r") return this.startReply();
+		if (data === "e") return this.openEvidenceView();
 		if (data === "d") return this.confirmDone();
 		if (data === "a") return this.attachPeek();
 		if (data === "!") return this.openPtyHelp("peek");
@@ -419,12 +427,42 @@ export class DashboardComponent implements Component {
 			return;
 		}
 		if (matchesKey(data, Key.space)) return this.openPeek();
+		if (data === "e") return this.openEvidenceView();
 		if (data === "r") {
 			this.startReply();
 			return;
 		}
 		if (data === "d") return this.confirmDone();
 		if (data === "a" || matchesKey(data, Key.enter)) return this.attachSelected();
+	}
+
+	private handleEvidenceKey(data: string): void {
+		const termRows = this.tui.terminal?.rows ?? 24;
+		const page = Math.max(1, termRows - 8);
+		if (matchesKey(data, Key.left) || matchesKey(data, Key.escape) || data === "<") {
+			this.mode = "list";
+			return;
+		}
+		if (matchesKey(data, Key.up) || data === "k") {
+			this.evidenceScrollTop = Math.max(0, this.evidenceScrollTop - 1);
+			return;
+		}
+		if (matchesKey(data, Key.down) || data === "j") {
+			this.evidenceScrollTop += 1;
+			return;
+		}
+		if (matchesKey(data, Key.pageUp)) {
+			this.evidenceScrollTop = Math.max(0, this.evidenceScrollTop - page);
+			return;
+		}
+		if (matchesKey(data, Key.pageDown)) {
+			this.evidenceScrollTop += page;
+			return;
+		}
+		if (data === "r") return this.startReply();
+		if (data === "v") return this.openSessionView();
+		if (data === "a" || matchesKey(data, Key.enter) || matchesKey(data, Key.right)) return this.attachSelected();
+		if (data === "x") return this.confirmClearDiagnostics();
 	}
 
 	private handleConfirmKey(data: string): void {
@@ -457,11 +495,11 @@ export class DashboardComponent implements Component {
 			return;
 		}
 		if (matchesKey(data, Key.up)) {
-			launch.fieldIndex = launch.fieldIndex === 0 ? 3 : launch.fieldIndex - 1;
+			launch.fieldIndex = launch.fieldIndex === 0 ? 4 : launch.fieldIndex - 1;
 			return;
 		}
 		if (matchesKey(data, Key.down)) {
-			launch.fieldIndex = launch.fieldIndex === 3 ? 0 : launch.fieldIndex + 1;
+			launch.fieldIndex = launch.fieldIndex === 4 ? 0 : launch.fieldIndex + 1;
 			return;
 		}
 		if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
@@ -557,8 +595,15 @@ export class DashboardComponent implements Component {
 		}
 		if (this.launch.fieldIndex === 1) return this.openLaunchPicker("cwd");
 		if (this.launch.fieldIndex === 2) return this.openLaunchPicker("model", "");
-		if (this.launch.thinkingOptions.length <= 1) return;
-		this.openLaunchPicker("thinking");
+		if (this.launch.fieldIndex === 3) {
+			if (this.launch.thinkingOptions.length <= 1) return;
+			this.openLaunchPicker("thinking");
+			return;
+		}
+		if (this.launch.fieldIndex === 4) {
+			this.launch.action = this.launch.action === "attach" ? "background" : "attach";
+			return;
+		}
 	}
 
 	private openLaunchDialog(): void {
@@ -589,6 +634,7 @@ export class DashboardComponent implements Component {
 			cwd: this.launch.cwd,
 			model: this.launch.model ? canonicalModelRef(this.launch.model) : null,
 			thinkingLevel: this.launch.thinking,
+			attach: this.launch.action === "attach",
 		});
 	}
 
@@ -609,6 +655,7 @@ export class DashboardComponent implements Component {
 		return {
 			fieldIndex: 0,
 			picker: null,
+			action: "background",
 			cwd,
 			cwdQuery: initialBrowserCwd,
 			cwdSuggestions: listDirectorySuggestions(initialBrowserCwd, cwd),
@@ -649,6 +696,7 @@ export class DashboardComponent implements Component {
 	private selectLaunchCwd(cwd: string): void {
 		if (!this.launch) return;
 		const next = this.buildLaunchState(cwd, this.launch.model, this.launch.thinking);
+		next.action = this.launch.action;
 		next.fieldIndex = 1;
 		next.cwdQuery = cwd;
 		next.cwdSuggestions = listDirectorySuggestions(cwd, cwd);
@@ -731,7 +779,7 @@ export class DashboardComponent implements Component {
 		this.notifyInputState("Filter cleared — NORMAL mode", "muted");
 	}
 
-	private submitDispatch(launchOpts?: { cwd?: string; model?: string | null; thinkingLevel?: ThinkingLevel | null }): void {
+	private submitDispatch(launchOpts?: { cwd?: string; model?: string | null; thinkingLevel?: ThinkingLevel | null; attach?: boolean }): void {
 		const text = this.input.trim();
 		if (!text) return this.toListMode();
 		const launchCwd = launchOpts?.cwd ?? this.deps.defaultCwd;
@@ -751,8 +799,16 @@ export class DashboardComponent implements Component {
 				/* best effort */
 			}
 			this.selectedId = res.viewId ?? this.selectedId;
+			if (launchOpts?.attach && res.hostMode === "pty" && res.viewId) {
+				this.setInput("");
+				this.launch = null;
+				this.mode = "list";
+				this.inputNotice = null;
+				this.done({ action: "attach", viewId: res.viewId, stopFirst: false });
+				return;
+			}
 			if (res.hostMode === "json-runner") {
-				this.notice(`Dispatched with non-live fallback: ${res.fallbackReason ?? "PTY unavailable"}`, "warn");
+				this.notice(launchOpts?.attach ? `Start & attach needs PTY; launched in background: ${res.fallbackReason ?? "PTY unavailable"}` : `Dispatched with non-live fallback: ${res.fallbackReason ?? "PTY unavailable"}`, "warn");
 			} else {
 				this.notice(`Dispatched: ${truncate(text, 40)}`, "info");
 			}
@@ -877,6 +933,7 @@ export class DashboardComponent implements Component {
 			error: null,
 			lastVisitedAt: null,
 			lastAgentActivityAt: null,
+			autoState: null,
 		};
 		state.semanticState = "completed";
 		state.processState = "exited";
@@ -884,6 +941,7 @@ export class DashboardComponent implements Component {
 		state.hasError = false;
 		state.question = null;
 		state.error = null;
+		state.autoState = null;
 		state.summary = completedSummary(state.summary, state.latestAssistantPreview);
 		state.lastActivityAt = Date.now();
 		state.updatedAt = Date.now();
@@ -965,6 +1023,28 @@ export class DashboardComponent implements Component {
 		this.mode = "session";
 	}
 
+	private openEvidenceView(): void {
+		if (!this.selectedId) return;
+		this.evidenceScrollTop = 0;
+		this.mode = "evidence";
+	}
+
+	private confirmClearDiagnostics(): void {
+		const row = this.selectedRow();
+		if (!row) return;
+		this.pending = {
+			prompt: `Clear diagnostics for "${row.meta.name}"? Evidence is preserved. (y/N)`,
+			returnMode: "evidence",
+			onYes: () => {
+				const res = this.deps.service.clearDiagnostics?.(row.meta.id) as { ok?: boolean; error?: string } | undefined;
+				if (!res?.ok) this.notice(res?.error ?? "Clear diagnostics failed", "error");
+				else this.notice("Diagnostics cleared", "info");
+				this.refresh();
+			},
+		};
+		this.mode = "confirm";
+	}
+
 	private peekStep(delta: number): void {
 		if (!this.peekId) return;
 		const idx = this.orderedIds.indexOf(this.peekId);
@@ -1032,6 +1112,7 @@ export class DashboardComponent implements Component {
 		if (this.mode === "ptyHelp") return this.fitToHeight(this.renderPtyHelp(width, ptyHealth), width);
 		if (this.mode === "peek" || this.mode === "reply") return this.fitToHeight(lines.concat(this.renderPeek(width)), width);
 		if (this.mode === "session") return this.fitToHeight(lines.concat(this.renderSession(width)), width);
+		if (this.mode === "evidence") return this.fitToHeight(lines.concat(this.renderEvidence(width)), width);
 		if (this.mode === "launch") return this.fitToHeight(lines.concat(this.renderLaunch(width)), width);
 
 		// Body: grouped rows with a scroll viewport.
@@ -1142,7 +1223,7 @@ export class DashboardComponent implements Component {
 			]);
 		}
 		const primary = this.input.trim() ? "enter launch" : live ? "enter attach live" : "enter resume";
-		const hints = ["i insert", primary, "→ attach", "m multi-select", ...(unread > 0 ? [`•${unread} unread`] : []), "d done", "space peek", "v transcript", "ctrl+r rename", "ctrl+x delete", "X delete state", "/ filter", "! pty", "? help"];
+		const hints = ["i insert", primary, "→ attach", "m multi-select", ...(unread > 0 ? [`•${unread} unread`] : []), "d done", "space peek", "v transcript", "e evidence", "ctrl+r rename", "ctrl+x delete", "X delete state", "/ filter", "! pty", "? help"];
 		if (this.input.trim()) hints.splice(1, 0, "esc clear");
 		return this.hintLine("NORMAL", "muted", hints);
 	}
@@ -1202,38 +1283,65 @@ export class DashboardComponent implements Component {
 			return [t.fg("muted", this.filterQuery ? "  No sessions match the filter." : "  No background sessions yet. Type below and press Enter.")];
 		}
 		const now = Date.now();
-		const groups = groupRows(this.rows, now);
+		const groups = groupRowsByFolder(this.rows, now);
 		const out: string[] = [];
 		for (const g of groups) {
 			if (out.length > 0) out.push("");
-			const glyph = stateGlyph(g.state, g.state === "working");
-			out.push(clip(`${stageFg(g.state, `${glyph} ${g.label}`)}${t.fg("dim", ` · ${g.rows.length}`)}`, width));
-			for (const rv of g.rows) {
-				out.push(this.renderRow(rv, width));
+			out.push(this.renderStageHeader(g.state, g.label, g.rowCount, width));
+			const showFolderHeaders = g.folders.length > 1 || g.folders.some((folder) => folder.rows.length > 1);
+			for (const folder of g.folders) {
+				if (showFolderHeaders) out.push(this.renderFolderHeader(g.state, folder, width));
+				for (const rv of folder.rows) {
+					out.push(this.renderRow(rv, width, { showFolder: !showFolderHeaders, indent: showFolderHeaders ? 4 : 2 }));
+				}
 			}
 		}
 		return out;
 	}
 
-	private renderRow(rv: ReturnType<typeof import("../core/rows.mjs")["rowView"]>, width: number): string {
+	private renderStageHeader(state: keyof typeof GROUP_LABELS, label: string, count: number, width: number): string {
+		const t = this.theme;
+		const glyph = stateGlyph(state, state === "working");
+		const title = stageFg(state, t.bold(`${glyph} ${label.toUpperCase()}`));
+		const countText = t.fg("dim", ` ${count}`);
+		const ruleWidth = Math.max(0, width - visibleWidth(`${glyph} ${label.toUpperCase()} ${count}`) - 2);
+		return clip(`${title}${countText} ${t.fg("borderMuted", "─".repeat(ruleWidth))}`, width);
+	}
+
+	private renderFolderHeader(state: keyof typeof GROUP_LABELS, folder: ReturnType<typeof groupRowsByFolder>[number]["folders"][number], width: number): string {
+		const t = this.theme;
+		const count = folder.rows.length;
+		const selectedInside = folder.rows.some((row) => row.id === this.selectedId);
+		const rail = selectedInside ? stageFg(state, "▌") : t.fg("dim", " ");
+		const name = t.fg(selectedInside ? "text" : "muted", `▾ ${folder.name}`);
+		const countText = t.fg("dim", ` ${count}`);
+		const pathBudget = Math.max(0, width - visibleWidth(`${rail}   ▾ ${folder.name} ${count}`) - 2);
+		const path = pathBudget > 14 ? ` ${t.fg("dim", truncate(displayPath(folder.path), pathBudget))}` : "";
+		return clip(` ${rail} ${name}${countText}${path}`, width);
+	}
+
+	private renderRow(rv: ReturnType<typeof import("../core/rows.mjs")["rowView"]>, width: number, opts: { showFolder?: boolean; indent?: number } = {}): string {
 		const t = this.theme;
 		const selected = rv.id === this.selectedId;
+		const indent = opts.indent ?? 0;
+		const contentWidth = Math.max(20, width - indent);
 		const glyph = stateGlyph(rv.state, rv.alive, rv.hostAlive, rv.unread);
 		const marker = stageFg(rv.state, selected ? `›${glyph}` : ` ${glyph}`);
-		const badge = `${this.mode === "select" ? `${this.isSelectedForBatch(rv.id) ? "◉" : "○"} ` : ""}${rv.pinned ? "★ " : ""}${rv.worktree ? "⌥ " : ""}`;
+		const statusBadges = `${rv.reviewReady ? "✓ " : ""}${rv.diagnosticStalled ? "⏳ " : ""}${rv.evidenceErrorCount || rv.diagnosticErrorCount ? "! " : ""}${rv.followUpCount ? `q${rv.followUpCount} ` : ""}${rv.steeringState && rv.steeringState !== "none" ? "π " : ""}`;
+		const badge = `${this.mode === "select" ? `${this.isSelectedForBatch(rv.id) ? "◉" : "○"} ` : ""}${rv.pinned ? "★ " : ""}${rv.worktree ? "⌥ " : ""}${statusBadges}`;
 		const ageRaw = ` ${rv.age}`;
-		const nameW = clamp(Math.floor(width * 0.34), 18, 30);
-		const folderW = width >= 72 ? clamp(Math.floor(width * 0.16), 10, 22) : width >= 56 ? 10 : 0;
+		const nameW = clamp(Math.floor(contentWidth * 0.34), 18, 30);
+		const folderW = opts.showFolder !== false ? (contentWidth >= 72 ? clamp(Math.floor(contentWidth * 0.16), 10, 22) : contentWidth >= 56 ? 10 : 0) : 0;
 		const availableName = Math.max(8, nameW - visibleWidth(badge));
 		const nameText = padTo(`${badge}${truncate(rv.name, availableName)}`, nameW);
 		const folderText = folderW > 0 ? padTo(truncate(rv.place, folderW), folderW) : "";
 		const folder = folderW > 0 ? ` ${t.fg("dim", folderText)}` : "";
-		const summaryW = Math.max(8, width - nameW - visibleWidth(folder) - visibleWidth(ageRaw) - 4);
+		const summaryW = Math.max(8, contentWidth - nameW - visibleWidth(folder) - visibleWidth(ageRaw) - 4);
 		const summary = truncate(rv.summary, summaryW);
 		let line = `${marker} ${t.fg(selected ? "text" : "muted", selected ? t.bold(nameText) : nameText)}${folder} ${t.fg(selected ? "text" : "muted", summary)}`;
-		line = padTo(line, width - visibleWidth(ageRaw));
+		line = padTo(line, contentWidth - visibleWidth(ageRaw));
 		line += t.fg("dim", ageRaw);
-		return clip(line, width);
+		return clip(`${" ".repeat(indent)}${clip(line, contentWidth)}`, width);
 	}
 
 	private renderPeek(width: number): string[] {
@@ -1247,6 +1355,12 @@ export class DashboardComponent implements Component {
 		out.push("");
 		out.push(t.fg("muted", "Summary"));
 		out.push(clip(`  ${normalizeGenericStatusText(st, row.state?.summary)}`, width));
+		if (row.state?.autoState) {
+			const auto = row.state.autoState;
+			out.push("");
+			out.push(t.fg("muted", "Auto-state"));
+			out.push(clip(`  ${auto.kind} · ${auto.confidence} · ${auto.source}${auto.reason ? ` — ${auto.reason}` : ""}`, width));
+		}
 		if (row.state?.question) {
 			out.push("");
 			out.push(t.fg("warning", "Question / blocker"));
@@ -1274,8 +1388,29 @@ export class DashboardComponent implements Component {
 			const notice = this.currentInputNotice();
 			if (notice) out.push(clip(t.fg(notice.color, `ⓘ ${notice.text}`), width));
 		} else {
-			out.push(clip(t.fg("dim", "↑↓ prev/next · →/> attach · d done · v transcript · r reply · esc back"), width));
+			out.push(clip(t.fg("dim", "↑↓ prev/next · →/> attach · d done · v transcript · e evidence · r reply · esc back"), width));
 		}
+		return out;
+	}
+
+	private renderEvidence(width: number): string[] {
+		const t = this.theme;
+		const row = this.selectedRow();
+		if (!row) return [t.fg("muted", "  (no session)")];
+		const evidenceRes = this.deps.service.evidence?.(row.meta.id);
+		const diagnosticsRes = this.deps.service.diagnostics?.(row.meta.id, { limit: 50 });
+		const panel = buildEvidencePanel({
+			row,
+			evidence: evidenceRes?.ok ? evidenceRes.evidence : null,
+			diagnostics: diagnosticsRes?.ok ? (diagnosticsRes.events ?? []) : [],
+			paths: evidenceRes?.ok ? evidenceRes.paths : {},
+			width,
+		});
+		const out: string[] = [];
+		const capacity = Math.max(3, (this.tui.terminal?.rows ?? 24) - 5);
+		out.push(...panel.slice(this.evidenceScrollTop, this.evidenceScrollTop + capacity).map((line: string) => clip(line, width)));
+		out.push(t.fg("dim", "─".repeat(width)));
+		out.push(clip(t.fg("dim", "←/< back · ↑↓ scroll · pgup/pgdn page · enter attach · r reply · v transcript · x clear diagnostics"), width));
 		return out;
 	}
 
@@ -1343,6 +1478,7 @@ export class DashboardComponent implements Component {
 		lines.push(this.renderLaunchField(inner, 1, `cwd      ${displayPath(launch.cwd)}`, launch.picker === null && launch.fieldIndex === 1));
 		lines.push(this.renderLaunchField(inner, 2, `model    ${launch.model ? formatLaunchModel(launch.model) : "default"}`, launch.picker === null && launch.fieldIndex === 2));
 		lines.push(this.renderLaunchField(inner, 3, `thinking ${launch.thinking}`, launch.picker === null && launch.fieldIndex === 3));
+		lines.push(this.renderLaunchField(inner, 4, `action   ${launch.action === "attach" ? "start & attach" : "start in background"}`, launch.picker === null && launch.fieldIndex === 4));
 		lines.push("");
 		if (launch.picker === "cwd") {
 			lines.push(t.fg("warning", `cwd› ${singleLineInput(launch.cwdQuery)}${cursor()}`));
@@ -1360,7 +1496,7 @@ export class DashboardComponent implements Component {
 			lines.push("");
 			lines.push(t.fg("dim", "↑↓ choose · enter select · esc back"));
 		} else {
-			lines.push(t.fg("dim", "↑↓ move · enter open/select · esc cancel"));
+			lines.push(t.fg("dim", "↑↓ move · enter open/select/toggle · esc cancel"));
 		}
 		lines.push("");
 		lines.push(this.renderLaunchButton(inner, launch.picker === null && launch.fieldIndex === 0));
@@ -1374,7 +1510,7 @@ export class DashboardComponent implements Component {
 	}
 
 	private renderLaunchButton(width: number, selected: boolean): string {
-		const label = " Start session ";
+		const label = ` ${this.launch?.action === "attach" ? "Start & attach" : "Start session"} `;
 		const button = selected
 			? `${ansiBg(56, 189, 248)}${ansiFg(15, 23, 42, this.theme.bold(label))}\x1b[49m\x1b[39m`
 			: `${ansiBg(30, 41, 59)}${ansiFg(226, 232, 240, label)}\x1b[49m\x1b[39m`;
@@ -1412,14 +1548,16 @@ export class DashboardComponent implements Component {
 			["→ or >", "Attach to the selected real Pi session"],
 			["d", "Confirm and mark selected inactive session done"],
 			["space", "Peek when input is empty; in multi-select: toggle current row"],
+			["e", "Open evidence / diagnostics panel for selected session"],
 			["/", "Filter in normal mode; use i then / for slash commands"],
 			["!", "Open node-pty diagnostics and fix steps"],
 			["ctrl+r/t/s/x", "Rename · pin · stop · delete selected"],
 			["X", "Delete all inactive sessions in selected state"],
 			["v", "Open read-only transcript view"],
 			["In select", "a select all visible · u clear · d move done · ctrl+x delete done · esc cancel"],
-			["In peek", "→ attach · v transcript · r reply · ↑↓ adjacent"],
-			["In session", "← back · ↑↓ scroll · enter attach · r reply"],
+			["In peek", "→ attach · v transcript · e evidence · r reply · ↑↓ adjacent"],
+			["In session", "← back · ↑↓ scroll · e evidence · enter attach · r reply"],
+			["In evidence", "← back · ↑↓ scroll · r reply · v transcript · x clear diagnostics"],
 		];
 		const dialog = [t.fg("accent", t.bold("Hotkeys / keybindings")), ""];
 		for (const [k, v] of rows) dialog.push(`  ${t.fg("accent", k.padEnd(14))} ${t.fg("muted", v)}`);

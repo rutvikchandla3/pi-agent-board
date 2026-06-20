@@ -12,10 +12,12 @@ import { defaultRoot } from "./core/paths.mjs";
 import { listRows } from "./core/store.mjs";
 import { createService } from "./runtime/service.mjs";
 import { openDashboard, registerAgentBoardCommand } from "./commands/agent-board.js";
+import { registerBgCommand } from "./commands/bg.js";
 
 const RUNNER_SCRIPT = fileURLToPath(new URL("../runner/job-runner.mjs", import.meta.url));
 const PTY_RUNNER_SCRIPT = fileURLToPath(new URL("../runner/pty-runner.mjs", import.meta.url));
 const TITLE_RUNNER_SCRIPT = fileURLToPath(new URL("../runner/title-runner.mjs", import.meta.url));
+const AUTO_STATE_RUNNER_SCRIPT = fileURLToPath(new URL("../runner/state-runner.mjs", import.meta.url));
 
 export default function piAgentBoard(pi: ExtensionAPI): void {
 	const root = defaultRoot();
@@ -24,15 +26,18 @@ export default function piAgentBoard(pi: ExtensionAPI): void {
 	const isHostedChild = process.env.AGENT_BOARD_CHILD === "1" || process.env.AGENT_VIEW_CHILD === "1";
 	const hostedViewId = process.env.AGENT_BOARD_VIEW_ID ?? process.env.AGENT_VIEW_VIEW_ID;
 
-	registerAgentBoardCommand(pi, {
+	const commandOpts = {
 		root,
 		runnerScript: RUNNER_SCRIPT,
 		titleRunnerScript: TITLE_RUNNER_SCRIPT,
+		autoStateRunnerScript: AUTO_STATE_RUNNER_SCRIPT,
 		ptyRunnerScript: PTY_RUNNER_SCRIPT,
 		piCommand,
 		piArgsPrefix,
 		getThinkingLevel: () => pi.getThinkingLevel(),
-	});
+	};
+	registerAgentBoardCommand(pi, commandOpts);
+	registerBgCommand(pi, commandOpts);
 	pi.registerFlag("agent-board", {
 		description: "Open the agent-board dashboard on startup",
 		type: "boolean",
@@ -41,7 +46,7 @@ export default function piAgentBoard(pi: ExtensionAPI): void {
 
 	// Footer status: reconcile stale rows and surface how many need attention.
 	const serviceFor = (ctx: ExtensionContext) =>
-		createService({ root, runnerScript: RUNNER_SCRIPT, ptyRunnerScript: PTY_RUNNER_SCRIPT, titleRunnerScript: TITLE_RUNNER_SCRIPT, piCommand, piArgsPrefix, defaultCwd: ctx.cwd });
+		createService({ root, runnerScript: RUNNER_SCRIPT, ptyRunnerScript: PTY_RUNNER_SCRIPT, titleRunnerScript: TITLE_RUNNER_SCRIPT, autoStateRunnerScript: AUTO_STATE_RUNNER_SCRIPT, piCommand, piArgsPrefix, defaultCwd: ctx.cwd });
 
 	const updateStatus = (ctx: ExtensionContext) => {
 		try {
@@ -49,6 +54,7 @@ export default function piAgentBoard(pi: ExtensionAPI): void {
 			const rows = listRows(root);
 			const needs = rows.filter((r) => r.state?.semanticState === "needs_input").length;
 			const working = rows.filter((r) => r.alive).length;
+			const queued = rows.reduce((sum, r) => sum + (r.state?.followUps?.queuedCount ?? 0), 0);
 			if (isHostedChild) return;
 			if (rows.length === 0) {
 				ctx.ui.setStatus("agent-board", undefined);
@@ -57,6 +63,7 @@ export default function piAgentBoard(pi: ExtensionAPI): void {
 			const parts: string[] = [];
 			if (working > 0) parts.push(ctx.ui.theme.fg("accent", `●${working}`));
 			if (needs > 0) parts.push(ctx.ui.theme.fg("warning", `◆${needs}`));
+			if (queued > 0) parts.push(ctx.ui.theme.fg("muted", `q${queued}`));
 			ctx.ui.setStatus("agent-board", parts.length ? `${ctx.ui.theme.fg("muted", "agents")} ${parts.join(" ")}` : undefined);
 		} catch {
 			/* never break the session over a status update */
@@ -66,7 +73,7 @@ export default function piAgentBoard(pi: ExtensionAPI): void {
 	pi.on("session_start", async (event, ctx) => {
 		updateStatus(ctx);
 		if (event.reason === "startup" && !isHostedChild && pi.getFlag("agent-board") === true && ctx.hasUI) {
-			const service = createService({ root, runnerScript: RUNNER_SCRIPT, ptyRunnerScript: PTY_RUNNER_SCRIPT, titleRunnerScript: TITLE_RUNNER_SCRIPT, piCommand, piArgsPrefix, defaultCwd: ctx.cwd });
+			const service = createService({ root, runnerScript: RUNNER_SCRIPT, ptyRunnerScript: PTY_RUNNER_SCRIPT, titleRunnerScript: TITLE_RUNNER_SCRIPT, autoStateRunnerScript: AUTO_STATE_RUNNER_SCRIPT, piCommand, piArgsPrefix, defaultCwd: ctx.cwd });
 			service.reconcile();
 			ctx.ui.setWorkingVisible(false);
 			ctx.ui.setHeader(() => ({ render: () => [], invalidate() {} }));

@@ -12,6 +12,9 @@ export const newViewId = () => genId("view");
 /** @returns {string} a new run id. */
 export const newRunId = () => genId("run");
 
+/** @returns {string} a new follow-up queue item id. */
+export const newFollowUpId = () => genId("follow");
+
 /**
  * Derive a short, filesystem-safe slug from a free-text task, for display names.
  * @param {string} text

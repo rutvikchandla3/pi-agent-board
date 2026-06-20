@@ -17,6 +17,9 @@ import { GROUP_LABELS, GROUP_ORDER, SEMANTIC_STATES } from "./types.mjs";
  * @property {string} summary
  * @property {string} age
  * @property {string} place
+ * @property {string} folderKey
+ * @property {string} folderName
+ * @property {string} folderPath
  * @property {boolean} pinned
  * @property {SemanticState} state
  * @property {boolean} alive
@@ -25,6 +28,13 @@ import { GROUP_LABELS, GROUP_ORDER, SEMANTIC_STATES } from "./types.mjs";
  * @property {boolean} hasError
  * @property {boolean} worktree
  * @property {boolean} unread
+ * @property {boolean} reviewReady
+ * @property {number} evidenceErrorCount
+ * @property {boolean} diagnosticStalled
+ * @property {number} diagnosticErrorCount
+ * @property {number} followUpCount
+ * @property {string|null} followUpPreview
+ * @property {string} steeringState
  * @property {number} lastActivityAt
  */
 
@@ -98,7 +108,10 @@ export function rowView(row, now) {
 	const summary = oneLine(normalizeGenericStatusText(state, row.state?.summary));
 	const lastActivityAt = row.state?.lastActivityAt ?? row.meta.updatedAt ?? row.meta.createdAt;
 	const worktree = row.meta.worktreeMode === "worktree";
-	const place = baseName(row.meta.repoCwd || row.meta.cwd) + (worktree ? "⌥" : "");
+	const folderPath = row.meta.repoCwd || row.meta.cwd;
+	const folderName = baseName(folderPath) + (worktree ? "⌥" : "");
+	const folderKey = normalizeFolderKey(folderPath);
+	const place = folderName;
 	const lastVisitedAt = row.state?.lastVisitedAt ?? null;
 	const lastAgentActivityAt = row.state?.lastAgentActivityAt ?? null;
 	return {
@@ -107,6 +120,9 @@ export function rowView(row, now) {
 		summary,
 		age: relativeTime(lastActivityAt, now),
 		place,
+		folderKey,
+		folderName,
+		folderPath,
 		pinned: Boolean(row.meta.pinned),
 		state,
 		alive: Boolean(row.alive),
@@ -115,6 +131,13 @@ export function rowView(row, now) {
 		hasError: state === "failed",
 		worktree,
 		unread: lastAgentActivityAt !== null && (lastVisitedAt === null || lastAgentActivityAt > lastVisitedAt),
+		reviewReady: Boolean(row.state?.review?.ready),
+		evidenceErrorCount: row.state?.review?.errorCount ?? 0,
+		diagnosticStalled: Boolean(row.state?.diagnostics?.stalled),
+		diagnosticErrorCount: row.state?.diagnostics?.errorCount ?? 0,
+		followUpCount: row.state?.followUps?.queuedCount ?? 0,
+		followUpPreview: row.state?.followUps?.lastQueuedPreview ?? null,
+		steeringState: row.state?.steering?.status ?? "none",
 		lastActivityAt,
 	};
 }
@@ -136,25 +159,68 @@ export function groupRows(rows, now) {
 	/** @type {Array<{state: SemanticState, label: string, rows: RowView[]}>} */
 	const groups = [];
 	for (const state of GROUP_ORDER) {
-		const inGroup = views
-			.filter((v) => v.state === state)
-			.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastActivityAt - a.lastActivityAt);
+		const inGroup = sortRowViews(views.filter((v) => v.state === state));
 		if (inGroup.length > 0) groups.push({ state, label: GROUP_LABELS[state], rows: inGroup });
 	}
 	return groups;
 }
 
 /**
+ * Group rows first by semantic state, then by repo/folder within that state.
+ * @param {Row[]} rows
+ * @param {number} now
+ * @returns {Array<{ state: SemanticState, label: string, rowCount: number, folders: Array<{ key: string, name: string, path: string, rows: RowView[], lastActivityAt: number, pinned: boolean }> }>}
+ */
+export function groupRowsByFolder(rows, now) {
+	const views = rows.map((r) => rowView(r, now));
+	const groups = [];
+	for (const state of GROUP_ORDER) {
+		const inState = views.filter((v) => v.state === state);
+		if (inState.length === 0) continue;
+		const byFolder = new Map();
+		for (const view of inState) {
+			const key = view.folderKey;
+			const existing = byFolder.get(key);
+			if (existing) existing.rows.push(view);
+			else byFolder.set(key, { key, name: view.folderName, path: view.folderPath, rows: [view], lastActivityAt: view.lastActivityAt, pinned: view.pinned });
+		}
+		const folders = [...byFolder.values()].map((folder) => {
+			folder.rows = sortRowViews(folder.rows);
+			folder.lastActivityAt = Math.max(...folder.rows.map((r) => r.lastActivityAt));
+			folder.pinned = folder.rows.some((r) => r.pinned);
+			return folder;
+		}).sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastActivityAt - a.lastActivityAt || a.name.localeCompare(b.name));
+		groups.push({ state, label: GROUP_LABELS[state], rowCount: inState.length, folders });
+	}
+	return groups;
+}
+
+/** @param {RowView[]} views */
+function sortRowViews(views) {
+	return views.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastActivityAt - a.lastActivityAt);
+}
+
+/** @param {string} path */
+function normalizeFolderKey(path) {
+	return String(path || "").replace(/\\/g, "/").replace(/\/+$/, "") || "/";
+}
+
+/**
  * Parse a filter query into a state filter + free-text terms.
  * Supports `s:<state>` (state prefix) and bare words (AND substring match).
  * @param {string} query
- * @returns {{ states: SemanticState[], terms: string[] }}
+ * @returns {{ states: SemanticState[], terms: string[], reviewReady: boolean, diagStalled: boolean, evidenceError: boolean, queued: boolean, steering: string|null }}
  */
 export function parseFilter(query) {
 	/** @type {Set<SemanticState>} */
 	const states = new Set();
 	/** @type {string[]} */
 	const terms = [];
+	let reviewReady = false;
+	let diagStalled = false;
+	let evidenceError = false;
+	let queued = false;
+	let steering = null;
 	for (const tok of String(query || "").trim().split(/\s+/).filter(Boolean)) {
 		const m = /^s:(.+)$/i.exec(tok);
 		if (m) {
@@ -163,11 +229,21 @@ export function parseFilter(query) {
 				const aliases = [s, GROUP_LABELS[s]];
 				if (aliases.some((alias) => matchesStateToken(alias, want))) states.add(s);
 			}
+		} else if (/^review:ready$/i.test(tok)) {
+			reviewReady = true;
+		} else if (/^diag:stalled$/i.test(tok)) {
+			diagStalled = true;
+		} else if (/^evidence:error$/i.test(tok)) {
+			evidenceError = true;
+		} else if (/^queued:(true|yes|1)$/i.test(tok)) {
+			queued = true;
+		} else if (/^steer:/i.test(tok)) {
+			steering = normalizeStateToken(tok.replace(/^steer:/i, ""));
 		} else {
 			terms.push(tok.toLowerCase());
 		}
 	}
-	return { states: [...states], terms };
+	return { states: [...states], terms, reviewReady, diagStalled, evidenceError, queued, steering };
 }
 
 /** @param {string} value */
@@ -183,7 +259,7 @@ function matchesStateToken(alias, want) {
 
 /** @param {string} query @returns {boolean} whether the text is a filter expression. */
 export function isFilterQuery(query) {
-	return /(^|\s)s:/i.test(query || "");
+	return /(^|\s)(s:|review:|diag:|evidence:|queued:|steer:)/i.test(query || "");
 }
 
 /**
@@ -193,10 +269,15 @@ export function isFilterQuery(query) {
  * @returns {Row[]}
  */
 export function filterRows(rows, query) {
-	const { states, terms } = parseFilter(query);
-	if (states.length === 0 && terms.length === 0) return rows;
+	const { states, terms, reviewReady, diagStalled, evidenceError, queued, steering } = parseFilter(query);
+	if (states.length === 0 && terms.length === 0 && !reviewReady && !diagStalled && !evidenceError && !queued && !steering) return rows;
 	return rows.filter((row) => {
 		if (states.length > 0 && !states.includes(rowState(row))) return false;
+		if (reviewReady && !row.state?.review?.ready) return false;
+		if (diagStalled && !row.state?.diagnostics?.stalled) return false;
+		if (evidenceError && (row.state?.review?.errorCount ?? 0) <= 0) return false;
+		if (queued && (row.state?.followUps?.queuedCount ?? 0) <= 0) return false;
+		if (steering && normalizeStateToken(row.state?.steering?.status ?? "none") !== steering) return false;
 		if (terms.length === 0) return true;
 		const hay = [row.meta.name, row.state?.summary ?? "", row.meta.repoCwd, row.meta.cwd]
 			.join(" ")

@@ -8,11 +8,17 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createConnection } from "node:net";
 import { resolve } from "node:path";
+import { applyAutoStateToStatus, autoStateEnabled, heuristicAutoState } from "../core/auto-state.mjs";
 import { finalizeRun, projectViewState, reduceEvent } from "../core/events.mjs";
+import { clearDiagnostics, appendDiagnostic, tailDiagnostics } from "../core/diagnostics.mjs";
+import { emptyEvidenceSnapshot, finalizeEvidence, readEvidence, reduceEvidence, summarizeEvidence, writeEvidence } from "../core/evidence.mjs";
+import { claimNextFollowUp, completeFollowUp, enqueueFollowUp, readFollowUpQueue, releaseFollowUp, summarizeFollowUpQueue, clearQueuedFollowUps, removeLastFollowUp } from "../core/follow-up-queue.mjs";
+import { approvePlan as approvePlanState, markExecutingApprovedPlan, readSteering, recordPlanReady, requestPlan as requestPlanState, requestPlanChanges as requestPlanChangesState, summarizeSteering } from "../core/steering.mjs";
+import { buildApprovePlanPrompt, buildPlanChangesPrompt, buildPlanRequestPrompt } from "../core/steering-prompts.mjs";
 import { isGenericStatusText } from "../core/derive.mjs";
 import { firstSentence, truncate } from "../core/heuristics.mjs";
 import { newRunId, newViewId, slugifyTask } from "../core/ids.mjs";
-import { launchHost as launchHostProcess, launchRun, launchTitle as launchTitleProcess } from "../core/launch.mjs";
+import { launchAutoState as launchAutoStateProcess, launchHost as launchHostProcess, launchRun, launchTitle as launchTitleProcess } from "../core/launch.mjs";
 import { gitRepoRoot } from "../core/repo.mjs";
 import { killProcess } from "../core/pid.mjs";
 import * as P from "../core/paths.mjs";
@@ -24,6 +30,7 @@ import {
 	readPid,
 	readState,
 	readStatus,
+	writeHost,
 	writeHostPid,
 	writeLaunchPrefs,
 	writeMeta,
@@ -42,9 +49,11 @@ import { diagnoseNodePtyFailure, ensureNodePtySpawnHelperExecutable, nodePtyFall
  *   piArgsPrefix: string[],
  *   defaultCwd: string,
  *   titleRunnerScript?: string,
+ *   autoStateRunnerScript?: string,
  *   launch?: typeof launchRun,
  *   launchHost?: typeof launchHostProcess,
  *   launchTitle?: typeof launchTitleProcess,
+ *   launchAutoState?: typeof launchAutoStateProcess,
  *   ptySupport?: (opts?: { refresh?: boolean, maxAgeMs?: number }) => { ok: boolean, reason?: string|null, issue?: any },
  * }} opts
  */
@@ -53,6 +62,7 @@ export function createService(opts) {
 	const launch = opts.launch ?? launchRun;
 	const launchHostImpl = opts.launchHost ?? launchHostProcess;
 	const launchTitleImpl = opts.launchTitle ?? launchTitleProcess;
+	const launchAutoStateImpl = opts.launchAutoState ?? launchAutoStateProcess;
 	const ptySupport = opts.ptySupport ?? ptyHostAvailability;
 	const ptyRunnerScript = opts.ptyRunnerScript ?? opts.runnerScript;
 	const titleRunnerScript = opts.titleRunnerScript ?? null;
@@ -82,6 +92,7 @@ export function createService(opts) {
 			tools: null,
 		};
 		const { pid } = launch(root, config, { runnerScript: opts.runnerScript });
+		appendDiagnostic(root, meta.id, { source: "service", runId, code: "launch_run", message: "Detached runner launched", details: { kind, pid } });
 		markQueued(meta.id, runId);
 		return { runId, pid };
 	}
@@ -109,10 +120,29 @@ export function createService(opts) {
 			cols: Number(process.env.COLUMNS || 120),
 			rows: Number(process.env.LINES || 36),
 		};
+		const socketPath = P.controlSocketPath(root, meta.id);
 		const { pid } = launchHostImpl(root, config, { runnerScript: ptyRunnerScript });
+		writeHost(root, {
+			version: 1,
+			viewId: meta.id,
+			mode: "pty",
+			runnerPid: pid,
+			childPid: null,
+			socketPath,
+			state: "starting",
+			startedAt: Date.now(),
+			lastSeenAt: Date.now(),
+			endedAt: null,
+			exitCode: null,
+			error: null,
+			cols: config.cols,
+			rows: config.rows,
+			attachedClients: 0,
+		});
 		writeHostPid(root, meta.id, pid);
+		appendDiagnostic(root, meta.id, { source: "service", code: "launch_host", message: "PTY host launched", details: { pid, hasInitialPrompt: Boolean(initialPrompt) } });
 		if (launchOpts.markQueued !== false) markQueued(meta.id, null);
-		return { pid, socketPath: P.controlSocketPath(root, meta.id) };
+		return { pid, socketPath };
 	}
 
 	/**
@@ -141,6 +171,37 @@ export function createService(opts) {
 		}
 	}
 
+	/**
+	 * Apply immediate heuristic auto-state and, when configured, queue a detached
+	 * model pass to refine the row without blocking the live Pi child.
+	 * @param {import("../core/types.mjs").ViewMeta} meta
+	 * @param {import("../core/types.mjs").RunStatus} status
+	 * @param {import("../core/types.mjs").EvidenceSnapshot} evidence
+	 * @returns {boolean}
+	 */
+	function queueAutoState(meta, status, evidence) {
+		if (!autoStateEnabled()) return false;
+		if (status.processState === "alive" || status.semanticState === "failed" || status.semanticState === "stopped") return false;
+		const latest = latestEvidenceText(evidence) || status.latestAssistantPreview || status.summary || "";
+		if (!latest.trim()) return false;
+		const changed = applyAutoStateToStatus(status, heuristicAutoState(latest, { lastAgentActivityAt: status.lastAgentActivityAt ?? null }), Date.now());
+		if (opts.autoStateRunnerScript) {
+			try {
+				launchAutoStateImpl(root, {
+					root,
+					viewId: meta.id,
+					runId: status.runId === "foreground" ? null : status.runId,
+					cwd: meta.cwd,
+					piCommand: opts.piCommand,
+					piArgsPrefix: opts.piArgsPrefix,
+				}, { runnerScript: opts.autoStateRunnerScript });
+			} catch (err) {
+				appendDiagnostic(root, meta.id, { source: "service", level: "warn", code: "auto_state_launch_failed", message: "Auto-state classifier could not be launched", details: { error: err instanceof Error ? err.message : String(err) } });
+			}
+		}
+		return changed;
+	}
+
 	/** @param {string} viewId @param {string|null} runId */
 	function markQueued(viewId, runId) {
 		const state = readState(root, viewId) ?? blankState(viewId);
@@ -152,6 +213,7 @@ export function createService(opts) {
 		state.hasError = false;
 		state.question = null;
 		state.error = null;
+		state.autoState = null;
 		state.lastActivityAt = Date.now();
 		state.updatedAt = Date.now();
 		writeState(root, state);
@@ -180,6 +242,7 @@ export function createService(opts) {
 		state.hasError = false;
 		state.question = null;
 		state.error = null;
+		state.autoState = null;
 		state.summary = completionSummary(state);
 		state.lastActivityAt = Date.now();
 		state.updatedAt = Date.now();
@@ -206,6 +269,8 @@ export function createService(opts) {
 			state.needsInput = false;
 			state.hasError = false;
 			state.question = null;
+			state.error = null;
+			state.autoState = null;
 			state.summary = "Stopped";
 			state.lastActivityAt = Date.now();
 			state.updatedAt = Date.now();
@@ -235,6 +300,7 @@ export function createService(opts) {
 			error: null,
 			lastVisitedAt: null,
 			lastAgentActivityAt: null,
+			autoState: null,
 		};
 	}
 
@@ -274,6 +340,7 @@ export function createService(opts) {
 			stoppedByUser: false,
 			turns: 0,
 			toolCount: 0,
+			autoState: s.autoState ?? null,
 		};
 	}
 
@@ -292,7 +359,7 @@ export function createService(opts) {
 
 	/** @param {string} sessionFile */
 	function rowForSession(sessionFile) {
-		return listRows(root).find((r) => samePath(r.meta.sessionFile, sessionFile)) ?? null;
+		return listRows(root, { includeArchived: true }).find((r) => samePath(r.meta.sessionFile, sessionFile)) ?? null;
 	}
 
 	/**
@@ -324,10 +391,98 @@ export function createService(opts) {
 		for (const row of survivors.slice(0, excess)) sendHostMessage(row, { type: "terminate" });
 	}
 
+	/** @param {import("../core/types.mjs").FollowUpKind|import("../core/types.mjs").RunKind|string} kind */
+	function runKindForKind(kind) {
+		switch (kind) {
+			case "plan_request":
+				return "plan";
+			case "plan_change":
+				return "plan_change";
+			case "plan_approval":
+				return "plan_approval";
+			case "plan":
+			case "reply":
+			case "dispatch":
+				return kind;
+			default:
+				return "reply";
+		}
+	}
+
+	/** @param {import("../core/types.mjs").FollowUpItem} item */
+	function runKindForFollowUp(item) {
+		return runKindForKind(item.kind);
+	}
+
+	/** @param {string} viewId @param {import("../core/types.mjs").FollowUpItem} item */
+	function promptForFollowUp(viewId, item) {
+		const steering = readSteering(root, viewId);
+		switch (item.kind) {
+			case "plan_request":
+				return buildPlanRequestPrompt(item.text);
+			case "plan_approval":
+				return buildApprovePlanPrompt(steering.planText);
+			case "plan_change":
+				return buildPlanChangesPrompt(steering.planText, item.text);
+			default:
+				return item.text;
+		}
+	}
+
+	/** @param {string} viewId */
+	function drainNextFollowUp(viewId) {
+		const row = loadRow(root, viewId);
+		if (!row) return { ok: false, error: "Unknown session" };
+		if (!canAutoDrain(row)) return { ok: false, error: "Session is not ready to drain queued follow-ups" };
+		const claimed = claimNextFollowUp(root, viewId);
+		if (!claimed.ok || !claimed.item) return claimed;
+		const item = claimed.item;
+		const prompt = promptForFollowUp(viewId, item);
+		try {
+			if (item.kind === "plan_approval") markExecutingApprovedPlan(root, viewId);
+			if (row.hostAlive) {
+				const sent = sendHostMessage(row, { type: "input", data: `${prompt}\r` });
+				if (!sent.ok) {
+					releaseFollowUp(root, viewId, item.id);
+					return sent;
+				}
+				completeFollowUp(root, viewId, item.id);
+				appendDiagnostic(root, viewId, { source: "queue", code: "follow_up_sent", message: "Queued follow-up sent to live host", details: { kind: item.kind } });
+				return { ok: true, sent: true, item };
+			}
+			const pty = ptySupport({ refresh: true });
+			let runId = null;
+			if (pty.ok) launchHost(row.meta, prompt);
+			else {
+				if (isExternalSession(row.meta)) {
+					releaseFollowUp(root, viewId, item.id);
+					appendDiagnostic(root, viewId, { source: "queue", level: "warn", code: "follow_up_waiting_for_pty", message: "Adopted session follow-up is waiting for PTY support", details: {} });
+					return { ok: false, error: "PTY is required to drain adopted session follow-ups safely" };
+				}
+				runId = launchForView(row.meta, prompt, runKindForFollowUp(item)).runId;
+			}
+			completeFollowUp(root, viewId, item.id, { runId });
+			appendDiagnostic(root, viewId, { source: "queue", code: "follow_up_started", message: "Queued follow-up started", details: { kind: item.kind, hostMode: pty.ok ? "pty" : "json-runner" } });
+			return { ok: true, started: true, item };
+		} catch (err) {
+			releaseFollowUp(root, viewId, item.id);
+			appendDiagnostic(root, viewId, { source: "queue", level: "error", code: "follow_up_drain_failed", message: "Queued follow-up failed to start", details: { error: err instanceof Error ? err.message : String(err) } });
+			return { ok: false, error: err instanceof Error ? err.message : String(err) };
+		}
+	}
+
 	/** @param {import("../core/store.mjs").Row} row @param {any} event */
 	function syncRowEvent(row, event) {
 		const now = Date.now();
 		const status = statusFromRow(row);
+		let evidence = readEvidence(root, row.meta.id);
+		if (!evidence.viewId) evidence = emptyEvidenceSnapshot({ viewId: row.meta.id, source: "hosted" });
+		try {
+			reduceEvidence(evidence, event, now);
+			writeEvidence(root, evidence);
+		} catch (err) {
+			appendDiagnostic(root, row.meta.id, { source: "evidence", level: "warn", code: "evidence_reduce_failed", message: "Could not reduce hosted evidence", details: { error: err instanceof Error ? err.message : String(err) } });
+		}
 
 		if (event.type === "input" || event.type === "before_agent_start" || event.type === "agent_start") {
 			status.semanticState = "working";
@@ -343,8 +498,21 @@ export function createService(opts) {
 
 		if (event.type === "agent_end") {
 			finalizeRun(status, { exitCode: 0 }, now);
+			finalizeEvidence(evidence, status, now);
+			const steering = readSteering(root, row.meta.id);
+			if (steering.status === "plan_requested" || steering.status === "changes_requested") {
+				recordPlanReady(root, row.meta.id, { planText: latestEvidenceText(evidence) || status.latestAssistantPreview || evidence.summary || "Plan ready", runId: status.runId });
+				status.semanticState = "needs_input";
+				status.question = "Approve this plan?";
+				status.summary = "Plan ready for approval";
+			} else if (queueAutoState(row.meta, status, evidence)) {
+				finalizeEvidence(evidence, status, now);
+			}
+			status.evidenceSummary = summarizeEvidence(evidence);
+			writeEvidence(root, evidence);
 			writeForegroundState(row, status);
 			pruneWarmHosts({ keepViewId: row.meta.id });
+			drainNextFollowUp(row.meta.id);
 			return true;
 		}
 
@@ -417,16 +585,26 @@ export function createService(opts) {
 		 * @param {string} text
 		 * @returns {{ ok: boolean, error?: string, hostMode?: "pty"|"json-runner", fallbackReason?: string }}
 		 */
-		reply(viewId, text) {
+		reply(viewId, text, replyOpts = {}) {
 			const prompt = String(text || "").trim();
 			if (!prompt) return { ok: false, error: "Empty reply" };
 			const row = loadRow(root, viewId);
 			if (!row) return { ok: false, error: "Unknown session" };
+			const delivery = replyOpts.delivery ?? "auto";
+			const kind = replyOpts.kind ?? "reply";
+			if (delivery === "queue" || (delivery === "auto" && isAgentBusy(row))) {
+				const queued = enqueueFollowUp(root, viewId, prompt, { kind, delivery, source: "user" });
+				if (queued.ok) appendDiagnostic(root, viewId, { source: "queue", code: "follow_up_queued", message: "Follow-up queued", details: { kind, queuedCount: queued.summary?.queuedCount } });
+				return queued.ok ? { ok: true, queued: true, summary: queued.summary } : queued;
+			}
 			if (row.hostAlive) return sendHostMessage(row, { type: "input", data: `${prompt}\r` });
 			if (row.alive) return { ok: false, error: "A run is already active for this session" };
 			const pty = ptySupport({ refresh: true });
 			if (pty.ok) launchHost(row.meta, prompt);
-			else launchForView(row.meta, prompt, "reply");
+			else {
+				if (isExternalSession(row.meta)) return { ok: false, error: "PTY is required to continue an adopted foreground session safely" };
+				launchForView(row.meta, prompt, runKindForKind(kind));
+			}
 			return { ok: true, hostMode: pty.ok ? "pty" : "json-runner", fallbackReason: pty.ok ? undefined : nodePtyFallbackMessage(pty) };
 		},
 
@@ -491,6 +669,57 @@ export function createService(opts) {
 			return { kind: "session", sessionFile: row.meta.sessionFile };
 		},
 
+		adoptSession(adoptOpts = {}) {
+			const sessionFile = String(adoptOpts.sessionFile || "").trim();
+			if (!sessionFile) return { ok: false, error: "No session file to adopt" };
+			const existing = rowForSession(sessionFile);
+			if (existing) {
+				existing.meta.archived = false;
+				if (adoptOpts.name) existing.meta.name = String(adoptOpts.name).trim() || existing.meta.name;
+				writeMeta(root, existing.meta);
+				if (!isAgentBusy(existing)) {
+					const state = readState(root, existing.meta.id) ?? existing.state ?? blankState(existing.meta.id);
+					state.semanticState = "idle";
+					state.processState = "exited";
+					state.needsInput = false;
+					state.hasError = false;
+					state.question = null;
+					state.error = null;
+					state.summary = "Backgrounded session";
+					state.updatedAt = Date.now();
+					state.lastActivityAt = Date.now();
+					writeState(root, state);
+				}
+				appendDiagnostic(root, existing.meta.id, { source: "service", code: "session_adopted", message: "Existing session adopted into Agent Board", details: { reused: true } });
+				return { ok: true, viewId: existing.meta.id, reused: true };
+			}
+			const cwd = adoptOpts.cwd ?? opts.defaultCwd;
+			const id = newViewId();
+			const repoRoot = gitRepoRoot(cwd);
+			const meta = createView(root, {
+				id,
+				name: adoptOpts.name ?? "background-session",
+				cwd,
+				repoCwd: cwd,
+				repoRoot,
+				worktreeMode: "off",
+				worktreePath: null,
+				defaultModel: adoptOpts.model ?? null,
+				defaultThinking: adoptOpts.thinkingLevel ?? null,
+				writeCapable: true,
+				sessionFile,
+			});
+			const state = readState(root, id) ?? blankState(id);
+			state.semanticState = "idle";
+			state.processState = "exited";
+			state.summary = "Backgrounded session";
+			state.updatedAt = Date.now();
+			state.lastActivityAt = Date.now();
+			writeState(root, state);
+			appendDiagnostic(root, id, { source: "service", code: "session_adopted", message: "Current session adopted into Agent Board", details: { reused: false } });
+			return { ok: true, viewId: meta.id, reused: false };
+		},
+
 		getLaunchPrefs() {
 			return readLaunchPrefs(root);
 		},
@@ -540,6 +769,65 @@ export function createService(opts) {
 		 * @param {string[]} viewIds
 		 * @returns {{ ok: boolean, completed: number, skipped: number, completedIds: string[] }}
 		 */
+		queueFollowUp(viewId, text, queueOpts = {}) {
+			const res = enqueueFollowUp(root, viewId, text, queueOpts);
+			if (res.ok) appendDiagnostic(root, viewId, { source: "queue", code: "follow_up_queued", message: "Follow-up queued", details: { kind: queueOpts.kind ?? "reply" } });
+			return res;
+		},
+
+		clearFollowUps(viewId) {
+			const res = clearQueuedFollowUps(root, viewId);
+			if (res.ok) appendDiagnostic(root, viewId, { source: "queue", code: "follow_ups_cleared", message: "Queued follow-ups cleared", details: { cancelled: res.cancelled } });
+			return res;
+		},
+
+		removeLastFollowUp(viewId) {
+			const res = removeLastFollowUp(root, viewId);
+			if (res.ok) appendDiagnostic(root, viewId, { source: "queue", code: "follow_up_removed", message: "Last queued follow-up removed", details: { itemId: res.item?.id } });
+			return res;
+		},
+
+		followUps(viewId) {
+			const queue = readFollowUpQueue(root, viewId);
+			return { queue, summary: summarizeFollowUpQueue(queue) };
+		},
+
+		drainNextFollowUp(viewId) {
+			return drainNextFollowUp(viewId);
+		},
+
+		requestPlan(viewId, text = "") {
+			const row = loadRow(root, viewId);
+			if (!row) return { ok: false, error: "Unknown session" };
+			requestPlanState(root, viewId, { note: text || null });
+			if (isAgentBusy(row)) return this.queueFollowUp(viewId, text, { kind: "plan_request", delivery: "queue", source: "steering" });
+			return this.reply(viewId, buildPlanRequestPrompt(text), { delivery: "now", kind: "plan_request" });
+		},
+
+		approvePlan(viewId) {
+			const row = loadRow(root, viewId);
+			const state = readSteering(root, viewId);
+			const approved = approvePlanState(root, viewId);
+			if (!approved.ok) return approved;
+			if (row && isAgentBusy(row)) return this.queueFollowUp(viewId, "approved", { kind: "plan_approval", delivery: "queue", source: "steering" });
+			markExecutingApprovedPlan(root, viewId);
+			return this.reply(viewId, buildApprovePlanPrompt(state.planText), { delivery: "now", kind: "plan_approval" });
+		},
+
+		requestPlanChanges(viewId, feedback) {
+			const row = loadRow(root, viewId);
+			const state = readSteering(root, viewId);
+			const changed = requestPlanChangesState(root, viewId, feedback);
+			if (!changed.ok) return changed;
+			if (row && isAgentBusy(row)) return this.queueFollowUp(viewId, feedback, { kind: "plan_change", delivery: "queue", source: "steering" });
+			return this.reply(viewId, buildPlanChangesPrompt(state.planText, feedback), { delivery: "now", kind: "plan_change" });
+		},
+
+		steering(viewId) {
+			const state = readSteering(root, viewId);
+			return { state, summary: summarizeSteering(state) };
+		},
+
 		markCompletedMany(viewIds) {
 			const ids = [...new Set((viewIds ?? []).filter(Boolean))];
 			let completed = 0;
@@ -625,9 +913,26 @@ export function createService(opts) {
 			let fixed = 0;
 			for (const row of listRows(root)) {
 				const s = row.state;
-				if (!s?.currentRunId) continue;
-				const looksActive = s.processState === "alive" || s.semanticState === "queued" || s.semanticState === "working";
-				if (!looksActive || row.alive) continue;
+				const looksActive = s?.processState === "alive" || s?.semanticState === "queued" || s?.semanticState === "working";
+				if (!s || !looksActive) continue;
+				if (!s.currentRunId) {
+					if (row.host && !row.hostAlive && (row.host.state === "starting" || row.host.state === "alive" || row.host.state === "exited" || row.host.state === "failed")) {
+						const failed = row.host.state === "starting" || row.host.state === "alive" || row.host.state === "failed" || Boolean(row.host.error) || (row.host.exitCode !== null && row.host.exitCode !== 0);
+						s.semanticState = failed ? "failed" : "idle";
+						s.processState = "exited";
+						s.hasError = failed;
+						s.needsInput = false;
+						s.question = null;
+						s.error = failed ? (s.error ?? row.host.error ?? "PTY host exited unexpectedly") : null;
+						s.summary = failed ? "Failed (PTY host exited)" : "In Progress";
+						s.updatedAt = now;
+						writeState(root, s);
+						appendDiagnostic(root, row.meta.id, { source: "service", level: failed ? "error" : "info", code: "host_reconciled", message: failed ? "PTY host exited before final event" : "PTY host finalized without final event", details: { hostState: row.host.state, exitCode: row.host.exitCode } });
+						fixed += 1;
+					}
+					continue;
+				}
+				if (row.alive) continue;
 				const status = readStatus(root, row.meta.id, s.currentRunId);
 				if (status?.endedAt) {
 					writeState(root, projectViewState(status, now, readState(root, row.meta.id) ?? row.state ?? null));
@@ -642,6 +947,12 @@ export function createService(opts) {
 					writeState(root, s);
 				}
 				fixed += 1;
+			}
+			for (const row of listRows(root)) {
+				if ((row.state?.followUps?.queuedCount ?? 0) > 0 && canAutoDrain(row)) {
+					const drained = drainNextFollowUp(row.meta.id);
+					if (drained.ok) fixed += 1;
+				}
 			}
 			return fixed;
 		},
@@ -685,13 +996,44 @@ export function createService(opts) {
 			const rows = listRows(root);
 			const staleHosts = rows.filter((row) => row.host?.state === "alive" && !row.hostAlive).length;
 			const liveHosts = rows.filter((row) => row.hostAlive).length;
+			const stalled = rows.filter((row) => row.state?.diagnostics?.stalled).length;
+			const diagnosticErrors = rows.reduce((sum, row) => sum + (row.state?.diagnostics?.errorCount ?? 0), 0);
 			return {
 				ok: Boolean(support.ok),
 				reason: support.ok ? null : support.reason ?? "PTY unavailable",
 				issue: support.ok ? null : (support.issue ?? diagnoseNodePtyFailure(support.reason ?? null)),
 				staleHosts,
 				liveHosts,
+				stalled,
+				diagnosticErrors,
 			};
+		},
+
+		evidence(viewId) {
+			const row = loadRow(root, viewId);
+			if (!row) return { ok: false, error: "Unknown session" };
+			return {
+				ok: true,
+				evidence: readEvidence(root, viewId),
+				paths: {
+					evidence: P.evidencePath(root, viewId),
+					diagnostics: P.diagnosticsPath(root, viewId),
+					session: row.meta.sessionFile,
+					screenLog: P.screenLogPath(root, viewId),
+				},
+			};
+		},
+
+		diagnostics(viewId, diagOpts = {}) {
+			const row = loadRow(root, viewId);
+			if (!row) return { ok: false, error: "Unknown session" };
+			return { ok: true, events: tailDiagnostics(root, viewId, { limit: diagOpts.limit ?? 50 }) };
+		},
+
+		clearDiagnostics(viewId) {
+			const row = loadRow(root, viewId);
+			if (!row) return { ok: false, error: "Unknown session" };
+			return clearDiagnostics(root, viewId);
 		},
 
 		/** @param {string} viewId @returns {import("../core/store.mjs").Row|null} */
@@ -705,6 +1047,23 @@ export function createService(opts) {
 function isAgentBusy(row) {
 	const st = row.state?.semanticState;
 	return Boolean(row.alive && (st === "queued" || st === "working"));
+}
+
+/** @param {import("../core/types.mjs").ViewMeta} meta */
+function isExternalSession(meta) {
+	const normalized = resolve(meta.sessionFile).replace(/\\/g, "/");
+	return !normalized.endsWith(`/sessions/${meta.id}.jsonl`);
+}
+
+/** @param {import("../core/types.mjs").EvidenceSnapshot} evidence */
+function latestEvidenceText(evidence) {
+	return evidence.assistantEvidence?.[evidence.assistantEvidence.length - 1]?.text ?? "";
+}
+
+/** @param {import("../core/store.mjs").Row} row */
+function canAutoDrain(row) {
+	const st = row.state?.semanticState;
+	return !isAgentBusy(row) && (st === "idle" || st === "completed");
 }
 
 /** @param {import("../core/types.mjs").ViewState} state */
@@ -730,6 +1089,7 @@ function compactSummary(text) {
 function sendHostMessage(row, message) {
 	const socketPath = row.host?.socketPath;
 	if (!socketPath) return { ok: false, error: "No host socket" };
+	if (!existsSync(socketPath)) return { ok: false, error: "Host socket is not ready" };
 	try {
 		const socket = createConnection(socketPath);
 		socket.on("connect", () => {

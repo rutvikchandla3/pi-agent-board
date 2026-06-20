@@ -11,6 +11,7 @@ import {
 	mkdirSync,
 	readFileSync,
 	renameSync,
+	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
@@ -70,6 +71,15 @@ export function appendLine(file, line) {
 }
 
 /**
+ * Append one JSON value as a JSONL record.
+ * @param {string} file
+ * @param {unknown} value
+ */
+export function appendJsonl(file, value) {
+	appendLine(file, JSON.stringify(value));
+}
+
+/**
  * Read a JSONL file into parsed objects, skipping blank/corrupt lines.
  * @param {string} file
  * @returns {any[]}
@@ -90,6 +100,33 @@ export function readJsonl(file) {
 		return out;
 	} catch {
 		return [];
+	}
+}
+
+/**
+ * Read the newest `limit` JSONL records. Corrupt lines are skipped.
+ * @param {string} file
+ * @param {number} [limit]
+ * @returns {any[]}
+ */
+export function readJsonlTail(file, limit = 50) {
+	const all = readJsonl(file);
+	const n = Math.max(0, Math.floor(Number(limit) || 0));
+	return n > 0 ? all.slice(-n) : all;
+}
+
+/**
+ * Best-effort delete helper used by cleanup actions.
+ * @param {string} file
+ * @returns {boolean}
+ */
+export function removeFile(file) {
+	try {
+		if (!existsSync(file)) return false;
+		unlinkSync(file);
+		return true;
+	} catch {
+		return false;
 	}
 }
 

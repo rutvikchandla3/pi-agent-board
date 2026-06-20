@@ -50,6 +50,12 @@ export function createRunStatus(config, pid, now) {
 		stoppedByUser: false,
 		turns: 0,
 		toolCount: 0,
+		eventCount: 0,
+		lastEventAt: null,
+		usage: null,
+		stallReason: null,
+		evidenceSummary: null,
+		autoState: null,
 	};
 	return status;
 }
@@ -64,6 +70,8 @@ export function createRunStatus(config, pid, now) {
 export function reduceEvent(status, event, now) {
 	if (!event || typeof event !== "object" || typeof event.type !== "string") return false;
 	let meaningful = false;
+	status.eventCount = (status.eventCount ?? 0) + 1;
+	status.lastEventAt = now;
 
 	switch (event.type) {
 		case "tool_execution_start": {
@@ -95,6 +103,7 @@ export function reduceEvent(status, event, now) {
 		}
 		case "message_end": {
 			const msg = event.message;
+			if (msg?.usage || event.usage) status.usage = mergeUsage(status.usage ?? null, msg?.usage ?? event.usage);
 			if (msg?.role === "assistant") {
 				status.turns += 1;
 				if (msg.model && !status.model) status.model = msg.model;
@@ -183,5 +192,23 @@ export function projectViewState(status, now, previousState = null) {
 		error: status.error,
 		lastVisitedAt: previousState?.lastVisitedAt ?? null,
 		lastAgentActivityAt: status.lastAgentActivityAt ?? previousState?.lastAgentActivityAt ?? null,
+		review: status.evidenceSummary ?? previousState?.review,
+		diagnostics: previousState?.diagnostics,
+		autoState: status.autoState ?? previousState?.autoState ?? null,
+		followUps: previousState?.followUps,
+		steering: previousState?.steering,
+	};
+}
+
+/** @param {import("./types.mjs").EvidenceUsage|null} current @param {any} usage */
+function mergeUsage(current, usage) {
+	if (!usage || typeof usage !== "object") return current;
+	const input = Number(usage.inputTokens ?? usage.input_tokens ?? usage.prompt_tokens ?? 0) || 0;
+	const output = Number(usage.outputTokens ?? usage.output_tokens ?? usage.completion_tokens ?? 0) || 0;
+	const total = Number(usage.totalTokens ?? usage.total_tokens ?? input + output) || input + output;
+	return {
+		inputTokens: (current?.inputTokens ?? 0) + input,
+		outputTokens: (current?.outputTokens ?? 0) + output,
+		totalTokens: (current?.totalTokens ?? 0) + total,
 	};
 }
