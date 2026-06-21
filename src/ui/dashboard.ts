@@ -1288,7 +1288,7 @@ export class DashboardComponent implements Component {
 		for (const g of groups) {
 			if (out.length > 0) out.push("");
 			out.push(this.renderStageHeader(g.state, g.label, g.rowCount, width));
-			const showFolderHeaders = g.folders.length > 1 || g.folders.some((folder) => folder.rows.length > 1);
+			const showFolderHeaders = g.showFolders;
 			for (const folder of g.folders) {
 				if (showFolderHeaders) out.push(this.renderFolderHeader(g.state, folder, width));
 				for (const rv of folder.rows) {

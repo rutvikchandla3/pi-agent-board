@@ -69,6 +69,19 @@ test("groupRowsByFolder nests rows by folder inside each stage", () => {
 	assert.equal(groups[1].folders[0].name, "r-code");
 });
 
+test("groupRowsByFolder marks showFolders only when a stage spans multiple folders", () => {
+	const single = [
+		row("a", "working", { repoCwd: "/repo/x" }),
+		row("b", "working", { repoCwd: "/repo/x" }),
+	];
+	assert.equal(groupRowsByFolder(single, 0)[0].showFolders, false);
+	const multi = [
+		row("a", "working", { repoCwd: "/repo/x" }),
+		row("b", "working", { repoCwd: "/repo/y" }),
+	];
+	assert.equal(groupRowsByFolder(multi, 0)[0].showFolders, true);
+});
+
 test("rowView normalizes generic status labels to current display names", () => {
 	assert.equal(rowView(row("a", "working", { summary: "Working…" }), 0).summary, "Running…");
 	assert.equal(rowView(row("b", "idle", { summary: "Idle" }), 0).summary, "In Progress");

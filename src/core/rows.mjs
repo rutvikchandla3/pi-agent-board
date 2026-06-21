@@ -167,9 +167,11 @@ export function groupRows(rows, now) {
 
 /**
  * Group rows first by semantic state, then by repo/folder within that state.
+ * `showFolders` is true only when a stage spans more than one folder, so a stage backed by
+ * a single folder renders as a flat list (no redundant folder header).
  * @param {Row[]} rows
  * @param {number} now
- * @returns {Array<{ state: SemanticState, label: string, rowCount: number, folders: Array<{ key: string, name: string, path: string, rows: RowView[], lastActivityAt: number, pinned: boolean }> }>}
+ * @returns {Array<{ state: SemanticState, label: string, rowCount: number, showFolders: boolean, folders: Array<{ key: string, name: string, path: string, rows: RowView[], lastActivityAt: number, pinned: boolean }> }>}
  */
 export function groupRowsByFolder(rows, now) {
 	const views = rows.map((r) => rowView(r, now));
@@ -190,7 +192,8 @@ export function groupRowsByFolder(rows, now) {
 			folder.pinned = folder.rows.some((r) => r.pinned);
 			return folder;
 		}).sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastActivityAt - a.lastActivityAt || a.name.localeCompare(b.name));
-		groups.push({ state, label: GROUP_LABELS[state], rowCount: inState.length, folders });
+		const showFolders = folders.length > 1;
+		groups.push({ state, label: GROUP_LABELS[state], rowCount: inState.length, showFolders, folders });
 	}
 	return groups;
 }
