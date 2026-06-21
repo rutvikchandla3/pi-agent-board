@@ -138,7 +138,7 @@ export class DashboardComponent implements Component {
 	) {
 		this.editor = new CustomEditor(tui, editorTheme(theme), keybindings as never, { paddingX: 0 });
 		this.editor.onChange = (text) => {
-			this.input = text;
+			this.input = this.editor.getExpandedText();
 			if (this.mode === "filter") {
 				this.filterQuery = text;
 				this.refresh();
@@ -724,7 +724,7 @@ export class DashboardComponent implements Component {
 
 	private handleEditorInput(data: string): void {
 		this.editor.handleInput(data);
-		this.input = this.editor.getText();
+		this.input = this.editor.getExpandedText();
 	}
 
 	private startDispatch(initialText = ""): void {
