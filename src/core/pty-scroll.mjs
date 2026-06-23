@@ -2,6 +2,32 @@ export function clampInt(value, min, max) {
 	return Math.max(min, Math.min(max, Math.floor(value)));
 }
 
+/** Lines scrolled per mouse-wheel event in the attach viewport when unset/invalid. */
+export const DEFAULT_WHEEL_LINES = 2;
+/** Lower bound for $AGENT_BOARD_WHEEL_LINES. */
+export const MIN_WHEEL_LINES = 1;
+/** Upper bound for $AGENT_BOARD_WHEEL_LINES. */
+export const MAX_WHEEL_LINES = 50;
+
+/**
+ * Resolve how many lines a single mouse-wheel event scrolls in the attach viewport.
+ *
+ * Reads `AGENT_BOARD_WHEEL_LINES`, clamps it to `[MIN_WHEEL_LINES, MAX_WHEEL_LINES]`,
+ * and falls back to `DEFAULT_WHEEL_LINES` when unset, empty, or non-numeric. macOS
+ * inertial/momentum scrolling fires a *burst* of wheel events per gesture, so a small
+ * value here already scrolls quickly; the previous fixed `5` overshot badly.
+ *
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {number}
+ */
+export function resolveWheelLines(env = process.env) {
+	const raw = String(env.AGENT_BOARD_WHEEL_LINES ?? "").trim();
+	if (!raw) return DEFAULT_WHEEL_LINES;
+	const parsed = Number.parseInt(raw, 10);
+	if (!Number.isFinite(parsed)) return DEFAULT_WHEEL_LINES;
+	return clampInt(parsed, MIN_WHEEL_LINES, MAX_WHEEL_LINES);
+}
+
 function parseMouseEventPrefix(data, offset = 0) {
 	const input = data.slice(offset);
 	const sgr = /^\x1b\[(<|\?)(\d+);(\d+);(\d+)([Mm])/.exec(input);
