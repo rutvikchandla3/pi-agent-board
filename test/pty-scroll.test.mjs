@@ -106,11 +106,11 @@ test("resizeJiggleSize chooses a safe temporary size to force child redraw", () 
 	assert.equal(resizeJiggleSize(20, 6), null);
 });
 
-test("resolveWheelLines defaults to 2 when unset, empty, or non-numeric", () => {
-	assert.equal(resolveWheelLines({}), 2);
-	assert.equal(resolveWheelLines({ AGENT_BOARD_WHEEL_LINES: "" }), 2);
-	assert.equal(resolveWheelLines({ AGENT_BOARD_WHEEL_LINES: "  " }), 2);
-	assert.equal(resolveWheelLines({ AGENT_BOARD_WHEEL_LINES: "fast" }), 2);
+test("resolveWheelLines defaults to 1 when unset, empty, or non-numeric", () => {
+	assert.equal(resolveWheelLines({}), 1);
+	assert.equal(resolveWheelLines({ AGENT_BOARD_WHEEL_LINES: "" }), 1);
+	assert.equal(resolveWheelLines({ AGENT_BOARD_WHEEL_LINES: "  " }), 1);
+	assert.equal(resolveWheelLines({ AGENT_BOARD_WHEEL_LINES: "fast" }), 1);
 });
 
 test("resolveWheelLines honors a valid override and clamps to [1, 50]", () => {

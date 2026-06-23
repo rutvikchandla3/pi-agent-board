@@ -3,7 +3,7 @@ export function clampInt(value, min, max) {
 }
 
 /** Lines scrolled per mouse-wheel event in the attach viewport when unset/invalid. */
-export const DEFAULT_WHEEL_LINES = 2;
+export const DEFAULT_WHEEL_LINES = 1;
 /** Lower bound for $AGENT_BOARD_WHEEL_LINES. */
 export const MIN_WHEEL_LINES = 1;
 /** Upper bound for $AGENT_BOARD_WHEEL_LINES. */
