@@ -12,6 +12,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { appendLine, readJson } from "../src/core/atomic.mjs";
 import { createRunStatus, finalizeRun, projectViewState, reduceEvent } from "../src/core/events.mjs";
+import { encodePromptForCliArg } from "../src/core/prompt-transport.mjs";
 import { applyAutoStateToStatus, autoStateEnabled, autoStateFromModelOrHeuristic, autoStateModel, buildAutoStatePrompt, heuristicAutoState } from "../src/core/auto-state.mjs";
 import { appendDiagnostic } from "../src/core/diagnostics.mjs";
 import { emptyEvidenceSnapshot, finalizeEvidence, reduceEvidence, summarizeEvidence, writeEvidence, writeRunEvidence } from "../src/core/evidence.mjs";
@@ -73,7 +74,7 @@ function main() {
 	if (config.model) args.push("--model", config.model);
 	if (config.thinkingLevel) args.push("--thinking", config.thinkingLevel);
 	if (config.tools) args.push("--tools", config.tools);
-	args.push(config.prompt);
+	args.push(encodePromptForCliArg(config.prompt));
 
 	appendDiagnostic(root, viewId, { source: "runner", runId, code: "worker_spawn", message: "Worker spawned", details: { command: config.piCommand, args: redactWorkerArgs(args) } });
 	const worker = spawn(config.piCommand, args, {

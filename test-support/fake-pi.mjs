@@ -18,6 +18,11 @@ const prompt = process.argv[process.argv.length - 1];
 const mode = process.env.FAKE_PI_MODE || "completed";
 const cwd = process.cwd();
 
+if (process.env.FAKE_PI_FAIL_ON_DASH_PROMPT === "1" && /^-/.test(prompt || "")) {
+	process.stderr.write(`Error: Unknown option: ${prompt}\n`);
+	process.exit(1);
+}
+
 function emit(obj) {
 	process.stdout.write(`${JSON.stringify(obj)}\n`);
 }

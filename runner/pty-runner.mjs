@@ -13,6 +13,7 @@ import { createServer } from "node:net";
 import { appendFileSync, existsSync, unlinkSync } from "node:fs";
 import { appendLine, readJson } from "../src/core/atomic.mjs";
 import * as P from "../src/core/paths.mjs";
+import { encodePromptForCliArg } from "../src/core/prompt-transport.mjs";
 import { readState, writeHost, writeState } from "../src/core/store.mjs";
 import { ensureNodePtySpawnHelperExecutable } from "../src/core/pty-support.mjs";
 
@@ -81,7 +82,7 @@ function main() {
 	if (config.model) args.push("--model", config.model);
 	if (config.thinkingLevel) args.push("--thinking", config.thinkingLevel);
 	if (config.tools) args.push("--tools", config.tools);
-	if (config.initialPrompt) args.push(config.initialPrompt);
+	if (config.initialPrompt) args.push(encodePromptForCliArg(config.initialPrompt));
 
 	const env = {
 		...process.env,
