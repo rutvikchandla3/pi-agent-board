@@ -5,6 +5,7 @@ import {
 	parseMouseEvent,
 	parseMouseInputChunk,
 	resizeJiggleSize,
+	resolveWheelLines,
 	scrollViewportTop,
 	selectionDragScrollLines,
 } from "../src/core/pty-scroll.mjs";
@@ -103,4 +104,20 @@ test("resizeJiggleSize chooses a safe temporary size to force child redraw", () 
 	assert.deepEqual(resizeJiggleSize(20, 34), { cols: 20, rows: 33 });
 	assert.deepEqual(resizeJiggleSize(120, 6), { cols: 119, rows: 6 });
 	assert.equal(resizeJiggleSize(20, 6), null);
+});
+
+test("resolveWheelLines defaults to 1 when unset, empty, or non-numeric", () => {
+	assert.equal(resolveWheelLines({}), 1);
+	assert.equal(resolveWheelLines({ AGENT_BOARD_WHEEL_LINES: "" }), 1);
+	assert.equal(resolveWheelLines({ AGENT_BOARD_WHEEL_LINES: "  " }), 1);
+	assert.equal(resolveWheelLines({ AGENT_BOARD_WHEEL_LINES: "fast" }), 1);
+});
+
+test("resolveWheelLines honors a valid override and clamps to [1, 50]", () => {
+	assert.equal(resolveWheelLines({ AGENT_BOARD_WHEEL_LINES: "1" }), 1);
+	assert.equal(resolveWheelLines({ AGENT_BOARD_WHEEL_LINES: "5" }), 5);
+	assert.equal(resolveWheelLines({ AGENT_BOARD_WHEEL_LINES: "  3 " }), 3);
+	assert.equal(resolveWheelLines({ AGENT_BOARD_WHEEL_LINES: "0" }), 1);
+	assert.equal(resolveWheelLines({ AGENT_BOARD_WHEEL_LINES: "-4" }), 1);
+	assert.equal(resolveWheelLines({ AGENT_BOARD_WHEEL_LINES: "999" }), 50);
 });

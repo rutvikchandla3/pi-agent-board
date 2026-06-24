@@ -8,7 +8,7 @@ import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/
 import { isProbablyEmptyPiInputLine } from "../core/pty-input.mjs";
 import { findHttpUrlAtCells, findWordRangeAtCells } from "../core/pty-links.mjs";
 import { nextAttachRender, shouldScheduleAttachRenderForMessage } from "../core/pty-attach-render.mjs";
-import { clampInt, parseMouseInputChunk, scrollViewportTop, selectionDragScrollLines } from "../core/pty-scroll.mjs";
+import { clampInt, parseMouseInputChunk, resolveWheelLines, scrollViewportTop, selectionDragScrollLines } from "../core/pty-scroll.mjs";
 
 export type PtyAttachResult = { action: "detached" } | { action: "closed"; exitCode?: number | null };
 
@@ -30,7 +30,6 @@ const DETACH_KEYS = new Set(["\x1d", "\x07"]); // ctrl+], ctrl+g
 const MOUSE_ENABLE = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const MOUSE_DISABLE = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
 const XTSHIFTESCAPE_SELECT = "\x1b[>0s";
-const MOUSE_WHEEL_LINES = 5;
 const DOUBLE_CLICK_MS = 260;
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const LOADING_TICK_MS = 120;
@@ -110,6 +109,8 @@ export class PtyAttachComponent implements Component {
 	private osc52Carry = "";
 	private passthroughCarry = "";
 	private readonly connectStartedAt = Date.now();
+	// Lines scrolled per mouse-wheel event; configurable via $AGENT_BOARD_WHEEL_LINES.
+	private readonly mouseWheelLines = resolveWheelLines();
 	private readonly term: XtermLike;
 	private cols = 120;
 	private rows = 24;
@@ -413,7 +414,7 @@ export class PtyAttachComponent implements Component {
 				if (wheel === 0) continue;
 				this.clearPendingClick();
 				this.clearSelection();
-				if (!this.tryScrollBy(wheel * MOUSE_WHEEL_LINES)) this.send({ type: "input", data: raw });
+				if (!this.tryScrollBy(wheel * this.mouseWheelLines)) this.send({ type: "input", data: raw });
 				continue;
 			}
 			handled = true;
