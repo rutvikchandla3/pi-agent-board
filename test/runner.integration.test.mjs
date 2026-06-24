@@ -83,7 +83,7 @@ test("runner auto-classifies a completed fake worker and writes durable artifact
 		delete process.env.FAKE_PI_MODE;
 		delete process.env.AGENT_BOARD_SUMMARY_MODEL;
 		Object.assign(process.env, { AGENT_BOARD_SUMMARY_MODEL: env.AGENT_BOARD_SUMMARY_MODEL });
-		rmSync(root, { recursive: true, force: true });
+		rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 	}
 });
 
@@ -105,7 +105,31 @@ test("runner classifies a question as needs_input", { timeout: 20000 }, async ()
 	} finally {
 		delete process.env.FAKE_PI_MODE;
 		delete process.env.AGENT_BOARD_SUMMARY_MODEL;
-		rmSync(root, { recursive: true, force: true });
+		rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+	}
+});
+
+test("runner protects dash-prefixed prompts passed via argv", { timeout: 20000 }, async () => {
+	const root = mkdtempSync(join(tmpdir(), "agentview-run-dash-"));
+	process.env.FAKE_PI_MODE = "completed";
+	process.env.FAKE_PI_FAIL_ON_DASH_PROMPT = "1";
+	process.env.AGENT_BOARD_SUMMARY_MODEL = "off";
+	try {
+		const meta = createView(root, { id: "v", name: "x", cwd: root });
+		const config = makeConfig(root, "v", "r", meta.sessionFile, root, "- Create a ticket");
+		launchRun(root, config, { runnerScript: RUNNER });
+		const status = await waitFor(() => {
+			const s = readStatus(root, "v", "r");
+			return s && s.endedAt && s.semanticState === "completed" ? s : null;
+		});
+		assert.ok(status);
+		assert.equal(status.semanticState, "completed");
+		assert.equal(status.exitCode, 0);
+	} finally {
+		delete process.env.FAKE_PI_MODE;
+		delete process.env.FAKE_PI_FAIL_ON_DASH_PROMPT;
+		delete process.env.AGENT_BOARD_SUMMARY_MODEL;
+		rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 	}
 });
 
@@ -127,7 +151,7 @@ test("runner marks failed when the worker exits nonzero", { timeout: 20000 }, as
 	} finally {
 		delete process.env.FAKE_PI_MODE;
 		delete process.env.AGENT_BOARD_SUMMARY_MODEL;
-		rmSync(root, { recursive: true, force: true });
+		rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 	}
 });
 
@@ -160,6 +184,6 @@ test("stopping the runner finalizes the run as stopped", { timeout: 20000 }, asy
 	} finally {
 		delete process.env.FAKE_PI_MODE;
 		delete process.env.AGENT_BOARD_SUMMARY_MODEL;
-		rmSync(root, { recursive: true, force: true });
+		rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 	}
 });
