@@ -5,14 +5,20 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/rutvikchandla3/pi-agent-board/blob/main/assets/demo.mp4"><strong>▶ Watch the 30s demo</strong></a>
-  · <a href="https://pi.dev/packages?name=pi-agent-board">Pi package gallery</a>
-  · <a href="https://www.npmjs.com/package/pi-agent-board">npm</a>
+  <a href="https://github.com/rutvikchandla3/pi-agent-board/blob/main/assets/demo.mp4"><strong>30s demo</strong></a>
+  | <a href="https://pi.dev/packages?name=pi-agent-board">Pi package gallery</a>
+  | <a href="https://www.npmjs.com/package/pi-agent-board">npm</a>
 </p>
 
-A Claude-Code-style **agent board** for [Pi](https://github.com/earendil-works/pi-mono): one full-screen TUI to dispatch, monitor, peek/reply to, attach to, and manage multiple **background Pi sessions**. Each row is a real, persisted, resumable Pi session — not a transient subagent job.
+Pi Agent Board is a full-screen TUI dashboard for [Pi](https://github.com/earendil-works/pi-mono). It lets you dispatch, monitor, peek/reply to, attach to, and clean up multiple background Pi sessions from one place.
 
-Built on Pi's public extension/session/TUI APIs. Implements `PRD.md` / `IMPLEMENTATION_PLAN.md`.
+## Problems It Solves
+
+- Run several Pi tasks at once without losing track of which are queued, running, waiting for input, in progress, done, failed, or stopped.
+- Keep real Pi sessions durable and resumable after `/reload`, closing Pi, or restarting the terminal.
+- Check the latest output and answer follow-up questions without interrupting a running session.
+- Attach to the full interactive Pi session only when hands-on work is needed.
+- Manage work across multiple projects in one global board.
 
 ## Install
 
@@ -20,98 +26,106 @@ From npm:
 
 ```bash
 pi install npm:pi-agent-board
-pi                          # then type /agent-board
-# or launch straight into the dashboard UI:
 pi /agent-board
 ```
 
-From a local checkout while developing:
+You can also start Pi normally and run `/agent-board`.
+
+Pi Agent Board requires Node 20+ and working Pi provider auth. If rows stay in `Running`, first confirm Pi can complete a one-shot model call:
+
+```bash
+pi --mode json -p --no-session "Reply with exactly: DONE"
+```
+
+That command should produce an assistant reply and finish with an `agent_end` event.
+
+From a local checkout:
 
 ```bash
 npm install
-pi install "$(pwd)"          # package install
-# or symlink for /reload-friendly auto-discovery:
+pi install "$(pwd)"
+pi /agent-board
+```
+
+For auto-discovery while developing:
+
+```bash
 ln -s "$(pwd)" ~/.pi/agent/extensions/agent-board
 pi
 ```
 
-> If you use the symlink route, Pi will keep auto-loading the extension until you remove the
-> symlink. `pi remove "$(pwd)"` only removes the package install entry.
+Remove that symlink when you no longer want Pi to auto-load the checkout. If you installed by path, remove it with `pi remove "$(pwd)"`.
 
-> **Requires working pi provider auth.** The dashboard launches background `pi` workers; if pi
-> can't reach a model provider, rows will sit in `Running`. Confirm with
-> `pi --mode json -p --no-session "say hi"` (must end in an `agent_end` event). See **VERIFY.md**.
->
-> If the header shows **`node-pty unavailable`**, press **`!`** inside the dashboard for a
-> cause-specific diagnosis and fix steps. The board now surfaces common macOS `spawn-helper`
-> permission/quarantine problems, missing `node-pty`, and native binary/runtime mismatches.
+## Use
 
-## What it does
+Open the board with `pi /agent-board` or `/agent-board` inside Pi.
 
-- **`/agent-board`** opens a full-screen dashboard, global across projects.
-- **`pi /agent-board`** starts directly in a cleaner dashboard-first UI (no normal Pi header/footer chrome) and quits Pi when you leave it.
-- **Dispatch** by typing in the bottom input and pressing `enter` → a **Start session** dialog opens with default focus on **Start session**; press `enter` again to launch, or change **cwd**, **model**, and **thinking** first. The dialog remembers your last launch defaults and prefers scoped models for the selected cwd when Pi settings define them.
-- **Live rows** grouped by stage and folder/repo: Queued · Running · Needs input · In Progress · Done · Failed · Stopped, with each stage clustered by cwd when it spans more than one folder, so related sessions stay together.
-- **Automatic terminal-state classification:** when a turn finishes, Agent Board classifies the last assistant response into **Needs input**, **In Progress**, or **Done** using a cheap LLM pass with heuristic fallback, so obvious completed sessions move to Done without manual cleanup.
-- **GPT-generated session titles:** new sessions start with a fallback slug, then a detached `openai-codex/gpt-5.5` title pass at **low** thinking renames them to a concise 3–4 word label when provider auth is available.
-- **Peek** (`space`) a row for its summary, blocker/question, and latest output; **reply** (`r`) inline without attaching.
-- **Attach** (`enter` or `→` / `>`) to continue the full interactive Pi session (confirms + interrupts if it's still running). The live PTY surface supports clickable links plus drag/double-click copy; detach with `←`, `ctrl+]`, or `ctrl+g`.
-- **Transcript view** (`v`) opens a full-screen read-only live transcript without interrupting it; **back** with (`←` / `<`).
-- **Manage:** rename (`ctrl+r`), pin (`ctrl+t`), stop (`ctrl+s`), mark done (`d`), multi-select (`m` → `space` toggle / `a` all visible / `u` clear / `d` move done / `ctrl+x` delete selected done batch), delete selected (`ctrl+x`, archives row & keeps the session), delete all inactive rows in the selected state (`X`), filter (`/`, supports `s:<state>` + free text), help (`?`, opens a hotkeys dialog).
-- **Read hints:** unread sessions use a stronger version of each stage icon instead of an extra dot, and the header/footer surface the unread count for quick scanning.
-- **Durable & resumable:** survives `/reload` and pi restart; reconciles runs whose monitor died.
-- **Parallel sessions:** Agent Board does not auto-create worktrees and does not block you from launching multiple sessions in the same repo.
+- Type a task in the bottom input, then press `enter`.
+- Confirm **Start session**, or adjust `cwd`, model, and thinking level first.
+- Watch rows move through `Queued`, `Running`, `Needs input`, `In Progress`, `Done`, `Failed`, and `Stopped`.
+- Press `space` to peek at the selected row's summary, blocker, and latest output.
+- Press `r` to reply inline without attaching.
+- Press `enter`, `right`, or `>` to attach to the real Pi session.
+- Press `v` for a read-only live transcript.
+- Press `/` to filter by text or state, such as `s:running`.
+- Press `ctrl+r` rename, `ctrl+t` pin, `ctrl+s` stop, `d` mark done, `m` multi-select, `ctrl+x` delete/archive, `X` delete inactive rows in the selected state, and `?` for help.
 
-## How it works
+Rows are stored under `~/.pi/agent/agent-board/` by default. Deleting a row archives it from the board; it does not remove the underlying Pi session file.
 
-```text
-You
- │
- │  /agent-board or pi /agent-board
- ▼
-Agent Board TUI ── dispatch prompt ──▶ detached runner ──▶ background pi session
-      ▲                                      │                    │
-      │                                      │ streams JSON events│
-      │                                      ▼                    │
-      └──────── polls durable store ◀── events/status/state ◀─────┘
-      │
-      ├─ space: peek latest summary/question/output
-      ├─ r: reply inline to the background session
-      └─ enter/→: attach to the real Pi session through a PTY host
-```
+## Configuration
 
-The extension owns the dashboard + a file-backed store at `~/.pi/agent/agent-board/`. Each dispatch launches a **detached `runner/job-runner.mjs`** (plain Node, survives pi exiting) that spawns a headless worker — `pi --mode json -p --session <file> "<prompt>"` — streams its JSON events into `events.jsonl`, and reduces them into `status.json` + the row's `state.json`. The dashboard polls those files. No daemon, no `pi-subagents` internals. Full design + the exact Pi API contract: **`docs/EXPLORATION.md`**. Progress log + nuances: **`PROGRESS.md`**.
+Useful environment variables:
 
-## Media used by package galleries
+| Variable | Use |
+| --- | --- |
+| `AGENT_BOARD_ROOT` | Store location. Defaults to `~/.pi/agent/agent-board/`. |
+| `AGENT_BOARD_AUTO_STATE=off` | Disable automatic terminal-state moves. |
+| `AGENT_BOARD_AUTO_STATE_MODEL=<model>` | Model for classifying finished turns. Defaults to `gpt-4o`; use `off` for heuristic-only. |
+| `AGENT_BOARD_SUMMARY_MODEL=<model>` | Model for short row summaries. Defaults to `gpt-4o`; use `off` to disable. |
+| `AGENT_BOARD_TITLE_MODEL=<model>` | Model for generated session titles. Defaults to `openai-codex/gpt-5.5`; use `off` to disable. |
+| `AGENT_BOARD_TITLE_THINKING_LEVEL=<level>` | Thinking level for title generation. Defaults to `low`; use `off` to omit it. |
+| `AGENT_BOARD_DISABLE_PTY=1` | Disable PTY attach mode. |
+| `AGENT_BOARD_FORCE_PTY=1` | Force PTY attach mode. |
+| `AGENT_BOARD_ATTACH_MOUSE=0` | Disable attach-view mouse handling and use terminal-native selection. |
+| `AGENT_BOARD_WHEEL_LINES=<1-50>` | Lines scrolled per mouse-wheel event in attach view. Defaults to `1`. |
 
-The npm package declares Pi gallery media in `package.json`:
+Legacy `AGENT_VIEW_*` variables are still honored for migration.
 
-- video: [`assets/demo.mp4`](https://github.com/rutvikchandla3/pi-agent-board/blob/main/assets/demo.mp4)
-- image: [`assets/banner.png`](https://github.com/rutvikchandla3/pi-agent-board/blob/main/assets/banner.png)
-
-`pi.dev/packages?name=pi-agent-board` and the published npm package use these from package metadata.
-
-## Layout
-
-```
-src/core/*.mjs          pure, node-runnable brain (store, events, derive, heuristics, launch, rows, …)
-src/runtime/            service.mjs (dispatch/reply/stop/safety/recovery)
-src/ui/                 dashboard.ts (board UI) · pty-attach.ts (live attach surface)
-src/commands/           agent-board.ts (the /agent-board command + attach)
-src/index.ts            extension entry · index.ts re-export for auto-discovery
-runner/                 job-runner.mjs (detached run monitor) · pty-runner.mjs (detached PTY host)
-assets/                 banner and demo video for GitHub/npm/pi.dev
-test/ test-support/     node --test suite + fake-pi worker stub
-```
+If the board reports `node-pty unavailable`, press `!` in the dashboard for diagnosis and fix steps.
 
 ## Develop
 
 ```bash
+npm install
 npm run typecheck
 npm test
 npm run pack:dry
-# or all checks:
+```
+
+Run all checks with:
+
+```bash
 npm run verify
 ```
 
-Config env: `AGENT_BOARD_ROOT` (store location), `AGENT_BOARD_AUTO_STATE=off` (disable automatic terminal-state moves), `AGENT_BOARD_AUTO_STATE_MODEL` (auto-state classifier model; default `gpt-4o`, `off` for heuristic-only), `AGENT_BOARD_SUMMARY_MODEL` (summary model; default `gpt-4o`, `off` to disable), `AGENT_BOARD_TITLE_MODEL` (session title model; default `openai-codex/gpt-5.5`, `off` to disable), `AGENT_BOARD_TITLE_THINKING_LEVEL` (session title thinking level; default `low`), `AGENT_BOARD_DISABLE_PTY=1` / `AGENT_BOARD_FORCE_PTY=1` (override PTY attach mode), `AGENT_BOARD_ATTACH_MOUSE=0` (fall back to terminal-native selection), `AGENT_BOARD_WHEEL_LINES` (lines scrolled per mouse-wheel event in attach; default `1`, clamped to 1–50). Legacy `AGENT_VIEW_*` env vars are still honored for migration.
+`npm run verify` runs typecheck, tests, and a dry npm pack.
+
+## Publish
+
+Before publishing a new release, bump the package version, run verification, then publish:
+
+```bash
+npm run verify
+npm version patch
+npm publish
+```
+
+If the version is already bumped, skip `npm version patch`.
+
+Use `npm version minor` or `npm version major` instead when the release warrants it. After publish, users install with:
+
+```bash
+pi install npm:pi-agent-board
+```
+
+The Pi package gallery uses the `pi.video` and `pi.image` URLs from `package.json`.
