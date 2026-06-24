@@ -138,7 +138,7 @@ export class DashboardComponent implements Component {
 	) {
 		this.editor = new CustomEditor(tui, editorTheme(theme), keybindings as never, { paddingX: 0 });
 		this.editor.onChange = (text) => {
-			this.input = text;
+			this.input = this.editor.getExpandedText();
 			if (this.mode === "filter") {
 				this.filterQuery = text;
 				this.refresh();
@@ -724,7 +724,7 @@ export class DashboardComponent implements Component {
 
 	private handleEditorInput(data: string): void {
 		this.editor.handleInput(data);
-		this.input = this.editor.getText();
+		this.input = this.editor.getExpandedText();
 	}
 
 	private startDispatch(initialText = ""): void {
@@ -1288,7 +1288,7 @@ export class DashboardComponent implements Component {
 		for (const g of groups) {
 			if (out.length > 0) out.push("");
 			out.push(this.renderStageHeader(g.state, g.label, g.rowCount, width));
-			const showFolderHeaders = g.folders.length > 1 || g.folders.some((folder) => folder.rows.length > 1);
+			const showFolderHeaders = g.showFolders;
 			for (const folder of g.folders) {
 				if (showFolderHeaders) out.push(this.renderFolderHeader(g.state, folder, width));
 				for (const rv of folder.rows) {
