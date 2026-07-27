@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createService } from "../src/runtime/service.mjs";
+import { createService, shouldProbePtySupport } from "../src/runtime/service.mjs";
 import { diagnoseNodePtyFailure } from "../src/core/pty-support.mjs";
 import * as P from "../src/core/paths.mjs";
 import { createView, readState, writeHost, writeHostPid, writeState } from "../src/core/store.mjs";
@@ -157,6 +157,20 @@ test("dispatch schedules detached GPT title generation", () => {
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+});
+
+test("successful PTY support stays cached for the process lifetime", () => {
+	const cached = { ok: true, checkedAt: 1 };
+	assert.equal(shouldProbePtySupport(cached, {}, 60_000), false);
+	assert.equal(shouldProbePtySupport(cached, { refresh: true }, 60_000), false);
+});
+
+test("failed PTY support respects expiry and explicit refresh", () => {
+	const cached = { ok: false, checkedAt: 1_000 };
+	assert.equal(shouldProbePtySupport(undefined, {}, 1_500), true);
+	assert.equal(shouldProbePtySupport(cached, {}, 1_500), false);
+	assert.equal(shouldProbePtySupport(cached, {}, 3_000), true);
+	assert.equal(shouldProbePtySupport(cached, { refresh: true }, 1_500), true);
 });
 
 test("dispatch refreshes PTY support so a fixed install can recover without restarting Pi", () => {
