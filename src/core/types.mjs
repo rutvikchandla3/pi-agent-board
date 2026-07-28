@@ -110,6 +110,7 @@ export const GROUP_LABELS = {
  * @property {string} latestAssistantPreview
  * @property {{name:string, path:string|null}|null} latestTool
  * @property {string|null} question
+ * @property {Array<{toolCallId:string, question:string}>} pendingQuestions
  * @property {string|null} error
  * @property {number|null} lastVisitedAt
  * @property {number|null} lastAgentActivityAt Timestamp of the latest assistant reply shown in the row.
@@ -161,6 +162,7 @@ export const GROUP_LABELS = {
  * @property {{name:string, path:string|null}|null} currentTool
  * @property {string} latestAssistantPreview
  * @property {string|null} question
+ * @property {Array<{toolCallId:string, question:string}>} pendingQuestions
  * @property {string|null} error
  * @property {number|null} lastAgentActivityAt Timestamp of the latest assistant reply.
  * @property {string|null} stopReason

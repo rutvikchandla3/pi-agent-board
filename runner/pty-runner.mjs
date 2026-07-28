@@ -280,6 +280,7 @@ function markRowFailed(root, viewId, message) {
 		latestAssistantPreview: "",
 		latestTool: null,
 		question: null,
+		pendingQuestions: [],
 		error: null,
 	};
 	state.semanticState = "failed";

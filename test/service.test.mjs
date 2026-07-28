@@ -345,6 +345,37 @@ test("syncForegroundEvent marks a managed attached session working when user inp
 	}
 });
 
+test("syncHostedEvent persists interactive questions and resets them on new input", () => {
+	const root = freshRoot();
+	try {
+		createView(root, { id: "v1", name: "a", cwd: "/r" });
+		const svc = service(root);
+		assert.equal(svc.syncHostedEvent("v1", {
+			type: "tool_execution_start",
+			toolCallId: "q1",
+			toolName: "ask_questions",
+			args: { questions: [{ question: "Choose a mode?" }] },
+		}), true);
+		const waiting = readState(root, "v1");
+		assert.equal(waiting.semanticState, "needs_input");
+		assert.equal(waiting.processState, "alive");
+		assert.equal(waiting.needsInput, true);
+		assert.equal(waiting.question, "Choose a mode?");
+		assert.deepEqual(waiting.pendingQuestions, [{ toolCallId: "q1", question: "Choose a mode?" }]);
+		assert.equal(svc.markCompleted("v1").ok, false);
+		assert.deepEqual(svc.reply("v1", "safe"), { ok: false, error: "Attach to answer the pending question" });
+
+		assert.equal(svc.syncHostedEvent("v1", { type: "input", text: "safe" }), true);
+		const resumed = readState(root, "v1");
+		assert.equal(resumed.semanticState, "working");
+		assert.equal(resumed.needsInput, false);
+		assert.equal(resumed.question, null);
+		assert.deepEqual(resumed.pendingQuestions, []);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("syncForegroundEvent finalizes attached foreground turn from assistant output", async () => {
 	const root = freshRoot();
 	try {
