@@ -10,9 +10,10 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
-import { appendFileSync, existsSync, unlinkSync } from "node:fs";
+import { existsSync, unlinkSync } from "node:fs";
 import { appendLine, readJson } from "../src/core/atomic.mjs";
 import * as P from "../src/core/paths.mjs";
+import { appendBoundedScreenLog, reconcileScreenLog } from "../src/core/screen-log.mjs";
 import { encodePromptForCliArg } from "../src/core/prompt-transport.mjs";
 import { readState, writeHost, writeState } from "../src/core/store.mjs";
 import { ensureNodePtySpawnHelperExecutable } from "../src/core/pty-support.mjs";
@@ -38,6 +39,7 @@ function main() {
 
 	const socketPath = P.controlSocketPath(config.root, config.viewId);
 	const screenLog = P.screenLogPath(config.root, config.viewId);
+	let screenLogBytes = reconcileScreenLog(screenLog);
 	try {
 		if (existsSync(socketPath)) unlinkSync(socketPath);
 	} catch {}
@@ -117,9 +119,7 @@ function main() {
 	update({ childPid, state: "alive" });
 
 	child.onData((data) => {
-		try {
-			appendFileSync(screenLog, data);
-		} catch {}
+		screenLogBytes = appendBoundedScreenLog(screenLog, data, screenLogBytes);
 		broadcast({ type: "output", data });
 	});
 	child.onExit((code) => {

@@ -1,7 +1,7 @@
 /** Live PTY attach surface for hosted agent-board rows. */
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { existsSync, readFileSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import type { Component, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -9,6 +9,7 @@ import { isProbablyEmptyPiInputLine } from "../core/pty-input.mjs";
 import { findHttpUrlAtCells, findWordRangeAtCells } from "../core/pty-links.mjs";
 import { nextAttachRender, shouldScheduleAttachRenderForMessage } from "../core/pty-attach-render.mjs";
 import { clampInt, parseMouseInputChunk, resolveWheelLines, scrollViewportTop, selectionDragScrollLines } from "../core/pty-scroll.mjs";
+import { readScreenLogTail } from "../core/screen-log.mjs";
 
 export type PtyAttachResult = { action: "detached" } | { action: "closed"; exitCode?: number | null };
 
@@ -788,11 +789,9 @@ export class PtyAttachComponent implements Component {
 	}
 
 	private replayScreenLog(): void {
-		if (!this.opts.screenLogPath || !existsSync(this.opts.screenLogPath)) return;
-		try {
-			const raw = readFileSync(this.opts.screenLogPath, "utf8");
-			this.pushOutput(raw.slice(-100_000));
-		} catch {}
+		if (!this.opts.screenLogPath) return;
+		const tail = readScreenLogTail(this.opts.screenLogPath);
+		if (tail) this.pushOutput(tail);
 	}
 
 	private pushOutput(data: string, opts: { forwardProtocols?: boolean } = {}): void {
