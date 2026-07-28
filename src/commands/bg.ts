@@ -10,7 +10,7 @@ export interface BgCommandOptions {
 	titleRunnerScript?: string;
 	piCommand: string;
 	piArgsPrefix: string[];
-	getThinkingLevel: () => "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	getThinkingLevel: () => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 }
 
 export function registerBgCommand(pi: ExtensionAPI, opts: BgCommandOptions): void {
