@@ -44,6 +44,68 @@ test("tool_execution_start moves to working and sets currentTool", () => {
 	assert.equal(s.lastAgentActivityAt, null);
 });
 
+test("tool errors track the latest failure and survive unrelated tool success", () => {
+	const s = createRunStatus(cfg(), 1, 1000);
+	reduceEvent(s, { type: "tool_execution_end", toolCallId: "t1", toolName: "bash", isError: true }, 2000);
+	assert.equal(s.error, "Tool bash failed");
+	assert.equal(projectViewState(s, 2100).error, "Tool bash failed");
+
+	reduceEvent(s, { type: "tool_execution_end", toolCallId: "t2", toolName: "read", isError: true }, 2200);
+	assert.equal(s.error, "Tool read failed");
+
+	reduceEvent(s, { type: "tool_execution_end", toolCallId: "t3", toolName: "edit", isError: false }, 2300);
+	assert.equal(s.error, "Tool read failed");
+});
+
+test("successful assistant recovery clears current errors", () => {
+	const s = createRunStatus(cfg(), 1, 1000);
+	reduceEvent(s, { type: "tool_execution_end", toolCallId: "t1", toolName: "bash", isError: true }, 2000);
+
+	reduceEvent(s, {
+		type: "message_end",
+		message: { role: "assistant", stopReason: "toolUse", content: [] },
+	}, 2100);
+	assert.equal(s.error, "Tool bash failed");
+
+	reduceEvent(s, {
+		type: "message_end",
+		message: { role: "assistant", stopReason: "error", content: [] },
+	}, 2200);
+	assert.equal(s.error, "Tool bash failed");
+
+	reduceEvent(s, {
+		type: "message_end",
+		message: { role: "assistant", stopReason: "aborted", content: [] },
+	}, 2300);
+	assert.equal(s.error, "Tool bash failed");
+
+	reduceEvent(s, {
+		type: "message_end",
+		message: { role: "assistant", stopReason: "error", errorMessage: "Provider failed", content: [] },
+	}, 2400);
+	assert.equal(s.error, "Provider failed");
+	assert.equal(projectViewState(s, 2450).error, "Provider failed");
+
+	reduceEvent(s, {
+		type: "message_end",
+		message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Recovered." }] },
+	}, 2500);
+	assert.equal(s.error, null);
+	const recovered = projectViewState(s, 2600);
+	assert.equal(recovered.error, null);
+	assert.equal(recovered.hasError, false);
+});
+
+test("terminal failure preserves an unrecovered tool error", () => {
+	const s = createRunStatus(cfg(), 1, 1000);
+	reduceEvent(s, { type: "tool_execution_end", toolCallId: "t1", toolName: "bash", isError: true }, 2000);
+	finalizeRun(s, { exitCode: 1 }, 3000);
+	assert.equal(s.error, "Tool bash failed");
+	const failed = projectViewState(s, 3100);
+	assert.equal(failed.error, "Tool bash failed");
+	assert.equal(failed.hasError, true);
+});
+
 test("message_end assistant updates preview and detects question", () => {
 	const s = createRunStatus(cfg(), 1, 1000);
 	reduceEvent(
