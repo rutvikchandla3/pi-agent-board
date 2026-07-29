@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import type { Component, EditorTheme, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { requestDashboardRender } from "../core/dashboard-render.mjs";
 import { isGenericStatusText, normalizeGenericStatusText } from "../core/derive.mjs";
 import { firstSentence, truncate } from "../core/heuristics.mjs";
 import {
@@ -308,15 +309,7 @@ export class DashboardComponent implements Component {
 				this.mode = this.ptyHelpReturnMode;
 				break;
 		}
-		this.requestFullRender();
-	}
-
-	private requestFullRender(): void {
-		// The dashboard replaces the user's whole mental screen, but Pi's custom UI
-		// renderer is still embedded in the interactive TUI/scrollback. Differential
-		// redraw can append repeated dashboard snapshots when the viewport/cursor has
-		// drifted (notably on ↑/↓). Force a clear+home redraw for dashboard updates.
-		this.tui.requestRender(true);
+		requestDashboardRender(this.tui);
 	}
 
 	private handleListKey(data: string): void {

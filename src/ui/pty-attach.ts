@@ -7,7 +7,11 @@ import type { Component, KeybindingsManager, TUI } from "@earendil-works/pi-tui"
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { isProbablyEmptyPiInputLine } from "../core/pty-input.mjs";
 import { findHttpUrlAtCells, findWordRangeAtCells } from "../core/pty-links.mjs";
-import { nextAttachRender, shouldScheduleAttachRenderForMessage } from "../core/pty-attach-render.mjs";
+import {
+	createAttachOutputRenderScheduler,
+	nextAttachRender,
+	shouldScheduleAttachRenderForMessage,
+} from "../core/pty-attach-render.mjs";
 import { clampInt, parseMouseInputChunk, resolveWheelLines, scrollViewportTop, selectionDragScrollLines } from "../core/pty-scroll.mjs";
 import { readScreenLogTail } from "../core/screen-log.mjs";
 
@@ -113,6 +117,7 @@ export class PtyAttachComponent implements Component {
 	// Lines scrolled per mouse-wheel event; configurable via $AGENT_BOARD_WHEEL_LINES.
 	private readonly mouseWheelLines = resolveWheelLines();
 	private readonly term: XtermLike;
+	private readonly outputRender: ReturnType<typeof createAttachOutputRenderScheduler>;
 	private cols = 120;
 	private rows = 24;
 	// Absolute buffer line shown at the top of the viewport. null means follow bottom.
@@ -145,6 +150,7 @@ export class PtyAttachComponent implements Component {
 		this.cols = size.cols;
 		this.rows = size.rows;
 		this.term = new Terminal({ cols: this.cols, rows: this.rows, scrollback: 2000, allowProposedApi: true });
+		this.outputRender = createAttachOutputRenderScheduler(() => this.scheduleRender());
 		// Keep mouse reporting enabled by default so wheel scrolling and local drag-to-copy
 		// selection can coexist inside the attach surface. Set AGENT_BOARD_ATTACH_MOUSE=0
 		// to fall back to terminal-native selection only.
@@ -805,7 +811,7 @@ export class PtyAttachComponent implements Component {
 				this.receivedOutput = true;
 				this.stopLoadingTicker();
 			}
-			this.scheduleRender();
+			this.outputRender.request();
 		});
 	}
 
@@ -826,6 +832,7 @@ export class PtyAttachComponent implements Component {
 
 	private close(): void {
 		this.closed = true;
+		this.outputRender.dispose();
 		this.disableMouseScroll();
 		this.clearMouseRefreshTimers();
 		this.clearPendingClick();
