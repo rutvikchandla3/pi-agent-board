@@ -536,7 +536,7 @@ export function createService(opts) {
 		 *   worktree?: boolean,
 		 *   writeCapable?: boolean,
 		 *   model?: string|null,
-		 *   thinkingLevel?: "off"|"minimal"|"low"|"medium"|"high"|"xhigh"|null,
+		 *   thinkingLevel?: "off"|"minimal"|"low"|"medium"|"high"|"xhigh"|"max"|null,
 		 * }} [dispatchOpts]
 		 * @returns {{ ok: boolean, viewId?: string, error?: string, hostMode?: "pty"|"json-runner", fallbackReason?: string }}
 		 */

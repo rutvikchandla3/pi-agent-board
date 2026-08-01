@@ -49,7 +49,7 @@ interface ThemeLike {
 
 export type DashboardResult = { action: "exit" } | { action: "attach"; viewId: string; stopFirst: boolean };
 
-type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 type LaunchModel = {
 	provider: string;
 	id: string;

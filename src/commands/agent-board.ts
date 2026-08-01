@@ -21,7 +21,7 @@ export interface AgentBoardCommandOptions {
 	titleRunnerScript?: string;
 	piCommand: string;
 	piArgsPrefix: string[];
-	getThinkingLevel: () => "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	getThinkingLevel: () => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -63,7 +63,7 @@ export async function openDashboard(
 	service: ReturnType<typeof createService>,
 	options: {
 		initialSelectedId?: string | null;
-		currentThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+		currentThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	} = {},
 ): Promise<DashboardResult> {
 	ctx.ui.setWorkingVisible(false);
@@ -124,7 +124,7 @@ export async function dashboardAttachLoop(
 	service: ReturnType<typeof createService>,
 	root: string,
 	initialSelectedId: string | null,
-	getThinkingLevel?: () => "off" | "minimal" | "low" | "medium" | "high" | "xhigh",
+	getThinkingLevel?: () => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max",
 ): Promise<void> {
 	let selectedId = initialSelectedId;
 	let again = true;

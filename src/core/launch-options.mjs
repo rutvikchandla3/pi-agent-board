@@ -5,7 +5,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 
-/** @typedef {"off"|"minimal"|"low"|"medium"|"high"|"xhigh"} ThinkingLevel */
+/** @typedef {"off"|"minimal"|"low"|"medium"|"high"|"xhigh"|"max"} ThinkingLevel */
 
 /**
  * @typedef {Object} LaunchModelLike
@@ -31,7 +31,7 @@ import { SettingsManager } from "@earendil-works/pi-coding-agent";
  * @property {"scoped"|"all"} scopeSource
  */
 
-export const THINKING_LEVELS = /** @type {const} */ (["off", "minimal", "low", "medium", "high", "xhigh"]);
+export const THINKING_LEVELS = /** @type {const} */ (["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 /** @param {unknown} value @returns {value is ThinkingLevel} */
 export function isThinkingLevel(value) {

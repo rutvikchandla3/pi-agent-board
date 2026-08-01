@@ -49,6 +49,7 @@
     "image": "https://github.com/rutvikchandla3/pi-agent-board/raw/refs/heads/main/assets/banner.png"
   },
   "scripts": {
+    "postinstall": "node scripts/patch-vulns.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.mjs",
     "pack:dry": "npm pack --dry-run",
