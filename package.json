@@ -71,7 +71,7 @@
     "@earendil-works/pi-coding-agent": "0.79.8",
     "@earendil-works/pi-tui": "0.79.8",
     "@types/node": "^25.9.1",
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   },
   "dependencies": {
     "@xterm/headless": "^6.0.0",
