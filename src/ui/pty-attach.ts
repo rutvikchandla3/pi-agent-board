@@ -1,14 +1,19 @@
 /** Live PTY attach surface for hosted agent-board rows. */
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { existsSync, readFileSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import type { Component, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { isProbablyEmptyPiInputLine } from "../core/pty-input.mjs";
 import { findHttpUrlAtCells, findWordRangeAtCells } from "../core/pty-links.mjs";
-import { nextAttachRender, shouldScheduleAttachRenderForMessage } from "../core/pty-attach-render.mjs";
+import {
+	createAttachOutputRenderScheduler,
+	nextAttachRender,
+	shouldScheduleAttachRenderForMessage,
+} from "../core/pty-attach-render.mjs";
 import { clampInt, parseMouseInputChunk, resolveWheelLines, scrollViewportTop, selectionDragScrollLines } from "../core/pty-scroll.mjs";
+import { readScreenLogTail } from "../core/screen-log.mjs";
 
 export type PtyAttachResult = { action: "detached" } | { action: "closed"; exitCode?: number | null };
 
@@ -112,6 +117,7 @@ export class PtyAttachComponent implements Component {
 	// Lines scrolled per mouse-wheel event; configurable via $AGENT_BOARD_WHEEL_LINES.
 	private readonly mouseWheelLines = resolveWheelLines();
 	private readonly term: XtermLike;
+	private readonly outputRender: ReturnType<typeof createAttachOutputRenderScheduler>;
 	private cols = 120;
 	private rows = 24;
 	// Absolute buffer line shown at the top of the viewport. null means follow bottom.
@@ -144,6 +150,7 @@ export class PtyAttachComponent implements Component {
 		this.cols = size.cols;
 		this.rows = size.rows;
 		this.term = new Terminal({ cols: this.cols, rows: this.rows, scrollback: 2000, allowProposedApi: true });
+		this.outputRender = createAttachOutputRenderScheduler(() => this.scheduleRender());
 		// Keep mouse reporting enabled by default so wheel scrolling and local drag-to-copy
 		// selection can coexist inside the attach surface. Set AGENT_BOARD_ATTACH_MOUSE=0
 		// to fall back to terminal-native selection only.
@@ -788,11 +795,9 @@ export class PtyAttachComponent implements Component {
 	}
 
 	private replayScreenLog(): void {
-		if (!this.opts.screenLogPath || !existsSync(this.opts.screenLogPath)) return;
-		try {
-			const raw = readFileSync(this.opts.screenLogPath, "utf8");
-			this.pushOutput(raw.slice(-100_000));
-		} catch {}
+		if (!this.opts.screenLogPath) return;
+		const tail = readScreenLogTail(this.opts.screenLogPath);
+		if (tail) this.pushOutput(tail);
 	}
 
 	private pushOutput(data: string, opts: { forwardProtocols?: boolean } = {}): void {
@@ -806,7 +811,7 @@ export class PtyAttachComponent implements Component {
 				this.receivedOutput = true;
 				this.stopLoadingTicker();
 			}
-			this.scheduleRender();
+			this.outputRender.request();
 		});
 	}
 
@@ -827,6 +832,7 @@ export class PtyAttachComponent implements Component {
 
 	private close(): void {
 		this.closed = true;
+		this.outputRender.dispose();
 		this.disableMouseScroll();
 		this.clearMouseRefreshTimers();
 		this.clearPendingClick();

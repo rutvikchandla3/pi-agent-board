@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import type { Component, EditorTheme, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { requestDashboardRender } from "../core/dashboard-render.mjs";
 import { isGenericStatusText, normalizeGenericStatusText } from "../core/derive.mjs";
 import { firstSentence, truncate } from "../core/heuristics.mjs";
 import {
@@ -308,15 +309,7 @@ export class DashboardComponent implements Component {
 				this.mode = this.ptyHelpReturnMode;
 				break;
 		}
-		this.requestFullRender();
-	}
-
-	private requestFullRender(): void {
-		// The dashboard replaces the user's whole mental screen, but Pi's custom UI
-		// renderer is still embedded in the interactive TUI/scrollback. Differential
-		// redraw can append repeated dashboard snapshots when the viewport/cursor has
-		// drifted (notably on ↑/↓). Force a clear+home redraw for dashboard updates.
-		this.tui.requestRender(true);
+		requestDashboardRender(this.tui);
 	}
 
 	private handleListKey(data: string): void {
@@ -930,6 +923,7 @@ export class DashboardComponent implements Component {
 			latestAssistantPreview: "",
 			latestTool: null,
 			question: null,
+			pendingQuestions: [],
 			error: null,
 			lastVisitedAt: null,
 			lastAgentActivityAt: null,
@@ -940,6 +934,7 @@ export class DashboardComponent implements Component {
 		state.needsInput = false;
 		state.hasError = false;
 		state.question = null;
+		state.pendingQuestions = [];
 		state.error = null;
 		state.autoState = null;
 		state.summary = completedSummary(state.summary, state.latestAssistantPreview);
@@ -1923,7 +1918,8 @@ function wrap(text: string, width: number, max = 6): string[] {
 
 function isAgentBusy(row: Row): boolean {
 	const st = row.state?.semanticState;
-	return Boolean(row.alive && (st === "queued" || st === "working"));
+	const waitingOnTool = Array.isArray(row.state?.pendingQuestions) && row.state.pendingQuestions.length > 0;
+	return Boolean(row.alive && (st === "queued" || st === "working" || waitingOnTool));
 }
 
 function completedSummary(summary: string, _latestAssistantPreview: string): string {

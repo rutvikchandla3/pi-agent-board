@@ -281,6 +281,7 @@ export function createView(root, opts) {
 		latestAssistantPreview: "",
 		latestTool: null,
 		question: null,
+		pendingQuestions: [],
 		error: null,
 		lastVisitedAt: null,
 		lastAgentActivityAt: null,

@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createService } from "../src/runtime/service.mjs";
+import { createService, shouldProbePtySupport } from "../src/runtime/service.mjs";
 import { diagnoseNodePtyFailure } from "../src/core/pty-support.mjs";
 import * as P from "../src/core/paths.mjs";
 import { createView, readState, writeHost, writeHostPid, writeState } from "../src/core/store.mjs";
@@ -157,6 +157,20 @@ test("dispatch schedules detached GPT title generation", () => {
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+});
+
+test("successful PTY support stays cached for the process lifetime", () => {
+	const cached = { ok: true, checkedAt: 1 };
+	assert.equal(shouldProbePtySupport(cached, {}, 60_000), false);
+	assert.equal(shouldProbePtySupport(cached, { refresh: true }, 60_000), false);
+});
+
+test("failed PTY support respects expiry and explicit refresh", () => {
+	const cached = { ok: false, checkedAt: 1_000 };
+	assert.equal(shouldProbePtySupport(undefined, {}, 1_500), true);
+	assert.equal(shouldProbePtySupport(cached, {}, 1_500), false);
+	assert.equal(shouldProbePtySupport(cached, {}, 3_000), true);
+	assert.equal(shouldProbePtySupport(cached, { refresh: true }, 1_500), true);
 });
 
 test("dispatch refreshes PTY support so a fixed install can recover without restarting Pi", () => {
@@ -326,6 +340,37 @@ test("syncForegroundEvent marks a managed attached session working when user inp
 		assert.equal(next.currentRunId, null);
 		assert.equal(next.question, null);
 		assert.equal(service(root).row("v1").alive, true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("syncHostedEvent persists interactive questions and resets them on new input", () => {
+	const root = freshRoot();
+	try {
+		createView(root, { id: "v1", name: "a", cwd: "/r" });
+		const svc = service(root);
+		assert.equal(svc.syncHostedEvent("v1", {
+			type: "tool_execution_start",
+			toolCallId: "q1",
+			toolName: "ask_questions",
+			args: { questions: [{ question: "Choose a mode?" }] },
+		}), true);
+		const waiting = readState(root, "v1");
+		assert.equal(waiting.semanticState, "needs_input");
+		assert.equal(waiting.processState, "alive");
+		assert.equal(waiting.needsInput, true);
+		assert.equal(waiting.question, "Choose a mode?");
+		assert.deepEqual(waiting.pendingQuestions, [{ toolCallId: "q1", question: "Choose a mode?" }]);
+		assert.equal(svc.markCompleted("v1").ok, false);
+		assert.deepEqual(svc.reply("v1", "safe"), { ok: false, error: "Attach to answer the pending question" });
+
+		assert.equal(svc.syncHostedEvent("v1", { type: "input", text: "safe" }), true);
+		const resumed = readState(root, "v1");
+		assert.equal(resumed.semanticState, "working");
+		assert.equal(resumed.needsInput, false);
+		assert.equal(resumed.question, null);
+		assert.deepEqual(resumed.pendingQuestions, []);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
