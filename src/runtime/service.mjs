@@ -212,6 +212,7 @@ export function createService(opts) {
 		state.needsInput = false;
 		state.hasError = false;
 		state.question = null;
+		state.pendingQuestions = [];
 		state.error = null;
 		state.autoState = null;
 		state.lastActivityAt = Date.now();
@@ -241,6 +242,7 @@ export function createService(opts) {
 		state.needsInput = false;
 		state.hasError = false;
 		state.question = null;
+		state.pendingQuestions = [];
 		state.error = null;
 		state.autoState = null;
 		state.summary = completionSummary(state);
@@ -269,6 +271,7 @@ export function createService(opts) {
 			state.needsInput = false;
 			state.hasError = false;
 			state.question = null;
+			state.pendingQuestions = [];
 			state.error = null;
 			state.autoState = null;
 			state.summary = "Stopped";
@@ -297,6 +300,7 @@ export function createService(opts) {
 			latestAssistantPreview: "",
 			latestTool: null,
 			question: null,
+			pendingQuestions: [],
 			error: null,
 			lastVisitedAt: null,
 			lastAgentActivityAt: null,
@@ -334,6 +338,7 @@ export function createService(opts) {
 			currentTool: s.latestTool ? { name: s.latestTool.name, path: s.latestTool.path, summary: s.summary } : null,
 			latestAssistantPreview: s.latestAssistantPreview,
 			question: s.question,
+			pendingQuestions: Array.isArray(s.pendingQuestions) ? s.pendingQuestions : [],
 			error: s.error,
 			lastAgentActivityAt: s.lastAgentActivityAt ?? null,
 			stopReason: null,
@@ -489,6 +494,7 @@ export function createService(opts) {
 			status.processState = "alive";
 			status.currentTool = null;
 			status.question = null;
+			status.pendingQuestions = [];
 			status.error = null;
 			status.summary = "Running…";
 			status.lastActivityAt = now;
@@ -516,7 +522,7 @@ export function createService(opts) {
 			return true;
 		}
 
-		if (reduceEvent(status, event, now)) {
+		if (reduceEvent(status, event, now, { interactive: true })) {
 			status.processState = "alive";
 			writeForegroundState(row, status);
 			return true;
@@ -590,6 +596,7 @@ export function createService(opts) {
 			if (!prompt) return { ok: false, error: "Empty reply" };
 			const row = loadRow(root, viewId);
 			if (!row) return { ok: false, error: "Unknown session" };
+			if (hasPendingQuestions(row)) return { ok: false, error: "Attach to answer the pending question" };
 			const delivery = replyOpts.delivery ?? "auto";
 			const kind = replyOpts.kind ?? "reply";
 			if (delivery === "queue" || (delivery === "auto" && isAgentBusy(row))) {
@@ -684,6 +691,7 @@ export function createService(opts) {
 					state.needsInput = false;
 					state.hasError = false;
 					state.question = null;
+					state.pendingQuestions = [];
 					state.error = null;
 					state.summary = "Backgrounded session";
 					state.updatedAt = Date.now();
@@ -923,6 +931,7 @@ export function createService(opts) {
 						s.hasError = failed;
 						s.needsInput = false;
 						s.question = null;
+						s.pendingQuestions = [];
 						s.error = failed ? (s.error ?? row.host.error ?? "PTY host exited unexpectedly") : null;
 						s.summary = failed ? "Failed (PTY host exited)" : "In Progress";
 						s.updatedAt = now;
@@ -1044,9 +1053,14 @@ export function createService(opts) {
 }
 
 /** @param {import("../core/store.mjs").Row} row */
+function hasPendingQuestions(row) {
+	return Array.isArray(row.state?.pendingQuestions) && row.state.pendingQuestions.length > 0;
+}
+
+/** @param {import("../core/store.mjs").Row} row */
 function isAgentBusy(row) {
 	const st = row.state?.semanticState;
-	return Boolean(row.alive && (st === "queued" || st === "working"));
+	return Boolean(row.alive && (st === "queued" || st === "working" || hasPendingQuestions(row)));
 }
 
 /** @param {import("../core/types.mjs").ViewMeta} meta */

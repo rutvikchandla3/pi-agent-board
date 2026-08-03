@@ -930,6 +930,7 @@ export class DashboardComponent implements Component {
 			latestAssistantPreview: "",
 			latestTool: null,
 			question: null,
+			pendingQuestions: [],
 			error: null,
 			lastVisitedAt: null,
 			lastAgentActivityAt: null,
@@ -940,6 +941,7 @@ export class DashboardComponent implements Component {
 		state.needsInput = false;
 		state.hasError = false;
 		state.question = null;
+		state.pendingQuestions = [];
 		state.error = null;
 		state.autoState = null;
 		state.summary = completedSummary(state.summary, state.latestAssistantPreview);
@@ -1923,7 +1925,8 @@ function wrap(text: string, width: number, max = 6): string[] {
 
 function isAgentBusy(row: Row): boolean {
 	const st = row.state?.semanticState;
-	return Boolean(row.alive && (st === "queued" || st === "working"));
+	const waitingOnTool = Array.isArray(row.state?.pendingQuestions) && row.state.pendingQuestions.length > 0;
+	return Boolean(row.alive && (st === "queued" || st === "working" || waitingOnTool));
 }
 
 function completedSummary(summary: string, _latestAssistantPreview: string): string {

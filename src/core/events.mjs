@@ -44,6 +44,7 @@ export function createRunStatus(config, pid, now) {
 		currentTool: null,
 		latestAssistantPreview: "",
 		question: null,
+		pendingQuestions: [],
 		error: null,
 		lastAgentActivityAt: null,
 		stopReason: null,
@@ -65,9 +66,10 @@ export function createRunStatus(config, pid, now) {
  * @param {RunStatus} status
  * @param {any} event
  * @param {number} now
+ * @param {{ interactive?: boolean }} [opts]
  * @returns {boolean} whether this event produced a user-visible change worth persisting.
  */
-export function reduceEvent(status, event, now) {
+export function reduceEvent(status, event, now, opts = {}) {
 	if (!event || typeof event !== "object" || typeof event.type !== "string") return false;
 	let meaningful = false;
 	status.eventCount = (status.eventCount ?? 0) + 1;
@@ -77,9 +79,14 @@ export function reduceEvent(status, event, now) {
 		case "tool_execution_start": {
 			const name = event.toolName ?? event.args?.name ?? "tool";
 			const args = event.args ?? {};
-			status.currentTool = { name, path: toolPath(args), summary: toolSummary(name, args) };
 			status.toolCount += 1;
-			status.semanticState = "working";
+			if (opts.interactive && name === "ask_questions") {
+				upsertPendingQuestion(status, event.toolCallId, questionFromArgs(args));
+			} else if (pendingQuestions(status).length === 0) {
+				status.currentTool = { name, path: toolPath(args), summary: toolSummary(name, args) };
+				status.semanticState = "working";
+			}
+			preservePendingQuestion(status);
 			status.lastActivityAt = now;
 			// Unread is keyed off the latest assistant message, not intermediate tool churn.
 			meaningful = true;
@@ -87,8 +94,11 @@ export function reduceEvent(status, event, now) {
 		}
 		case "tool_execution_end": {
 			if (event.isError) status.error = `Tool ${event.toolName ?? ""} failed`.trim();
+			if (opts.interactive && event.toolName === "ask_questions") removePendingQuestion(status, event.toolCallId);
 			status.currentTool = null;
 			status.semanticState = "working";
+			status.question = null;
+			preservePendingQuestion(status);
 			status.lastActivityAt = now;
 			// Unread is keyed off the latest assistant message, not intermediate tool churn.
 			meaningful = true;
@@ -97,6 +107,7 @@ export function reduceEvent(status, event, now) {
 		case "message_start": {
 			if (event.message?.role === "assistant") {
 				status.semanticState = "working";
+				preservePendingQuestion(status);
 				status.lastActivityAt = now;
 			}
 			break;
@@ -119,6 +130,7 @@ export function reduceEvent(status, event, now) {
 					status.question = nb.question;
 				}
 				status.semanticState = "working";
+				preservePendingQuestion(status);
 				status.lastActivityAt = now;
 				status.lastAgentActivityAt = now;
 				meaningful = true;
@@ -153,7 +165,12 @@ export function finalizeRun(status, opts, now) {
 	status.stoppedByUser = Boolean(opts.stoppedByUser);
 	status.currentTool = null;
 
+	const hadPendingQuestions = pendingQuestions(status).length > 0;
+	status.pendingQuestions = [];
 	const nb = detectNeedsInput(status.latestAssistantPreview);
+	// An exited interactive tool can no longer accept an answer. Keep only an
+	// independently detected assistant question, never the stale tool prompt.
+	if (hadPendingQuestions) status.question = nb.question;
 	const needsInput = nb.needsInput || Boolean(status.question);
 	if (needsInput && !status.question) status.question = nb.question;
 
@@ -190,6 +207,7 @@ export function projectViewState(status, now, previousState = null) {
 		latestAssistantPreview: status.latestAssistantPreview,
 		latestTool: status.currentTool ? { name: status.currentTool.name, path: status.currentTool.path } : null,
 		question: status.question,
+		pendingQuestions: pendingQuestions(status),
 		error: status.error,
 		lastVisitedAt: previousState?.lastVisitedAt ?? null,
 		lastAgentActivityAt: status.lastAgentActivityAt ?? previousState?.lastAgentActivityAt ?? null,
@@ -199,6 +217,41 @@ export function projectViewState(status, now, previousState = null) {
 		followUps: previousState?.followUps,
 		steering: previousState?.steering,
 	};
+}
+
+/** @param {import("./types.mjs").RunStatus} status */
+function pendingQuestions(status) {
+	if (!Array.isArray(status.pendingQuestions)) status.pendingQuestions = [];
+	return status.pendingQuestions;
+}
+
+function questionFromArgs(args) {
+	for (const item of Array.isArray(args?.questions) ? args.questions : []) {
+		const question = String(item?.question ?? "").trim();
+		if (question) return question;
+	}
+	return "Answer the pending question";
+}
+
+function upsertPendingQuestion(status, toolCallId, question) {
+	const id = String(toolCallId ?? "ask_questions");
+	const pending = pendingQuestions(status);
+	const existing = pending.find((item) => item.toolCallId === id);
+	if (existing) existing.question = question;
+	else pending.push({ toolCallId: id, question });
+}
+
+function removePendingQuestion(status, toolCallId) {
+	const id = String(toolCallId ?? "ask_questions");
+	status.pendingQuestions = pendingQuestions(status).filter((item) => item.toolCallId !== id);
+}
+
+function preservePendingQuestion(status) {
+	const first = pendingQuestions(status)[0];
+	if (!first) return;
+	status.currentTool = null;
+	status.semanticState = "needs_input";
+	status.question = first.question;
 }
 
 /** @param {import("./types.mjs").EvidenceUsage|null} current @param {any} usage */
