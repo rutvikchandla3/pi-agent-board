@@ -1105,7 +1105,6 @@ function sendHostMessage(row, message) {
 
 let cachedPtySupport;
 const requireForPty = createRequire(import.meta.url);
-const PTY_SUPPORT_OK_TTL_MS = 30_000;
 const PTY_SUPPORT_ERROR_TTL_MS = 2_000;
 
 function ptyHostAvailability(opts = {}) {
@@ -1124,10 +1123,17 @@ function envInt(name, fallback, min, max, legacyName) {
 	return Math.max(min, Math.min(max, Math.floor(n)));
 }
 
+export function shouldProbePtySupport(cached, opts = {}, now = Date.now()) {
+	if (!cached) return true;
+	if (cached.ok) return false;
+	if (opts.refresh) return true;
+	const ttlMs = opts.maxAgeMs ?? PTY_SUPPORT_ERROR_TTL_MS;
+	return now - (cached.checkedAt ?? 0) >= ttlMs;
+}
+
 function ptySpawnSupported(opts = {}) {
 	const now = Date.now();
-	const ttlMs = opts.maxAgeMs ?? (cachedPtySupport?.ok ? PTY_SUPPORT_OK_TTL_MS : PTY_SUPPORT_ERROR_TTL_MS);
-	if (!opts.refresh && cachedPtySupport && now - (cachedPtySupport.checkedAt ?? 0) < ttlMs) return cachedPtySupport;
+	if (!shouldProbePtySupport(cachedPtySupport, opts, now)) return cachedPtySupport;
 	try {
 		ensureNodePtySpawnHelperExecutable(requireForPty);
 		const pty = requireForPty("node-pty");
