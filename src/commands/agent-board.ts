@@ -7,6 +7,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import { requestDashboardRender } from "../core/dashboard-render.mjs";
 import { createService } from "../runtime/service.mjs";
 import { screenLogPath } from "../core/paths.mjs";
 import { DashboardComponent, type DashboardResult } from "../ui/dashboard.js";
@@ -96,7 +97,7 @@ export async function openDashboard(
 				interval = setInterval(() => {
 					service.reconcile();
 					comp.refresh();
-					tui.requestRender(true);
+					requestDashboardRender(tui);
 				}, POLL_MS);
 				const withDispose = comp as DashboardComponent & { dispose: () => void };
 				withDispose.dispose = () => {
