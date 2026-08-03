@@ -86,7 +86,7 @@ export function reduceEvent(status, event, now) {
 			break;
 		}
 		case "tool_execution_end": {
-			if (event.isError) status.error = status.error ?? `Tool ${event.toolName ?? ""} failed`.trim();
+			if (event.isError) status.error = `Tool ${event.toolName ?? ""} failed`.trim();
 			status.currentTool = null;
 			status.semanticState = "working";
 			status.lastActivityAt = now;
@@ -109,6 +109,7 @@ export function reduceEvent(status, event, now) {
 				if (msg.model && !status.model) status.model = msg.model;
 				if (msg.stopReason) status.stopReason = msg.stopReason;
 				if (msg.errorMessage) status.error = msg.errorMessage;
+				else if (msg.stopReason === "stop") status.error = null;
 				const text = assistantText(msg);
 				if (text) {
 					// Store the full latest text (truncated) so peek shows meaningful output;
