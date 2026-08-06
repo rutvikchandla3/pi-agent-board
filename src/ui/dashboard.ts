@@ -1723,7 +1723,7 @@ function renderAgentboardHeader(
 	if (width < AGENTBOARD_HEADER_MIN_WIDTH) {
 		const raw = [
 			...blankLines(HEADER_TOP_PADDING),
-			clip(`${" ".repeat(HEADER_LEFT_PADDING)}${ansiFg(56, 189, 248, "◉")} ${ansiFg(248, 250, 252, theme.bold("AgentBoard"))} ${ansiFg(148, 163, 184, AGENTBOARD_VERSION)} ${theme.fg("dim", "·")} ${renderPtyHealth(theme, ptyHealth)}`, width),
+			clip(`${" ".repeat(HEADER_LEFT_PADDING)}${theme.fg("accent", "◉")} ${theme.fg("accent", theme.bold("AgentBoard"))} ${theme.fg("muted", AGENTBOARD_VERSION)} ${theme.fg("dim", "·")} ${renderPtyHealth(theme, ptyHealth)}`, width),
 			clip(headerStageSummary(theme, counts, filterQuery, true), width),
 			...blankLines(HEADER_BOTTOM_PADDING),
 		];
@@ -1735,7 +1735,7 @@ function renderAgentboardHeader(
 	const raw = blankLines(HEADER_TOP_PADDING);
 	raw.push(
 		...PI_ICON.map((iconLine, i) =>
-			clip(`${" ".repeat(HEADER_LEFT_PADDING)}${renderPiIconLine(iconLine)}${" ".repeat(HEADER_TEXT_GAP)}${textRows[i - textStart] ?? ""}`, width),
+			clip(`${" ".repeat(HEADER_LEFT_PADDING)}${renderPiIconLine(theme, iconLine)}${" ".repeat(HEADER_TEXT_GAP)}${textRows[i - textStart] ?? ""}`, width),
 		),
 	);
 	raw.push(...blankLines(HEADER_BOTTOM_PADDING));
@@ -1751,12 +1751,12 @@ function headerTextRows(
 	defaultCwd: string,
 	selectionCount: number,
 ): string[] {
-	const title = `${ansiFg(248, 250, 252, theme.bold("AgentBoard"))} ${ansiFg(148, 163, 184, AGENTBOARD_VERSION)} ${theme.fg("dim", "·")} ${renderPtyHealth(theme, ptyHealth)}`;
+	const title = `${theme.fg("accent", theme.bold("AgentBoard"))} ${theme.fg("muted", AGENTBOARD_VERSION)} ${theme.fg("dim", "·")} ${renderPtyHealth(theme, ptyHealth)}`;
 	const contextBits: string[] = [];
-	let contextPrefix = ansiFg(148, 163, 184, "Background Pi sessions");
+	let contextPrefix = theme.fg("muted", "Background Pi sessions");
 	if (row) {
 		const state = rowState(row);
-		contextPrefix = `${stageFg(state, stateGlyph(state, row.alive, row.hostAlive))} ${ansiFg(226, 232, 240, row.meta.name)}`;
+		contextPrefix = `${stageFg(state, stateGlyph(state, row.alive, row.hostAlive))} ${theme.fg("text", row.meta.name)}`;
 		if (row.meta.defaultModel) contextBits.push(row.meta.defaultModel);
 		if (row.meta.defaultThinking) contextBits.push(`thinking:${row.meta.defaultThinking}`);
 		contextBits.push(GROUP_LABELS[state]);
@@ -1769,7 +1769,7 @@ function headerTextRows(
 	if (selectionCount > 0) contextBits.push(`${selectionCount} selected`);
 	return [
 		title,
-		`${contextPrefix} ${ansiFg(100, 116, 139, contextBits.join(" · "))}`,
+		`${contextPrefix} ${theme.fg("muted", contextBits.join(" · "))}`,
 		headerStageSummary(theme, counts, filterQuery, false),
 	];
 }
@@ -1837,8 +1837,8 @@ function stageFg(state: keyof typeof GROUP_LABELS, text: string): string {
 	return ansiFg(r, g, b, text);
 }
 
-function renderPiIconLine(line: string): string {
-	return ansiFg(248, 250, 252, line);
+function renderPiIconLine(theme: ThemeLike, line: string): string {
+	return theme.fg("accent", line);
 }
 
 function ansiFg(r: number, g: number, b: number, text: string): string {
@@ -1852,7 +1852,7 @@ function ansiBg(r: number, g: number, b: number): string {
 function headerBgLine(content: string, width: number, row: number): string {
 	const clipped = clip(content, width);
 	const rest = Math.max(0, width - visibleWidth(clipped));
-	return `${ansiBg(15, 23, 42)}${clipped}${gridFill(row, width - rest, rest)}\x1b[49m`;
+	return `${clipped}${gridFill(row, width - rest, rest)}`;
 }
 
 function gridFill(row: number, startCol: number, count: number): string {
