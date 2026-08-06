@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import type { Component, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
-import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { isProbablyEmptyPiInputLine } from "../core/pty-input.mjs";
 import { findHttpUrlAtCells, findWordRangeAtCells } from "../core/pty-links.mjs";
 import { createAttachOutputRenderScheduler, nextAttachRender, shouldScheduleAttachRenderForMessage } from "../core/pty-attach-render.mjs";
@@ -55,6 +55,7 @@ interface XtermLike {
 	buffer: {
 		active: {
 			baseY: number;
+			cursorX?: number;
 			cursorY?: number;
 			length: number;
 			getLine(index: number): BufferLineLike | undefined;
@@ -235,7 +236,8 @@ export class PtyAttachComponent implements Component {
 		const bodyHeight = Math.max(1, height - 2);
 		let body: string[];
 		if (!this.attaching && this.receivedOutput) {
-			body = this.project(bodyHeight, width);
+			const projected = this.project(bodyHeight, width);
+			body = projected.lines;
 			while (body.length < bodyHeight) body.unshift("");
 		} else {
 			body = this.renderLoading(bodyHeight, width);
@@ -943,7 +945,7 @@ export class PtyAttachComponent implements Component {
 		});
 	}
 
-	private project(height: number, width: number): string[] {
+	private project(height: number, width: number): { lines: string[]; cursor: { row: number; col: number } | null } {
 		const out: string[] = [];
 		const buf = this.term.buffer.active;
 		const selection = normalizeSelection(this.selection);
@@ -951,11 +953,15 @@ export class PtyAttachComponent implements Component {
 		const start = this.viewportTop ?? this.bottomViewportTop(height);
 		const end = Math.min(buf.length, start + height);
 		const reusable = buf.getNullCell();
+		// The PTY cursor: xterm buffer cursorY is relative to baseY (the viewport top of
+		// the child terminal); cursorX may equal cols (one past the last cell). Only render
+		// it when it lands inside the projected viewport.
+		const cursor = cursorInViewport(buf, start, height);
 		for (let i = start; i < end; i++) {
-			out.push(clipTerminalLine(lineToAnsi(buf.getLine(i), reusable, this.term, i, selection), width));
+			out.push(lineToAnsi(buf.getLine(i), reusable, this.term, i, selection, cursor));
 		}
 		if (out.length === 0) out.push("Waiting for PTY output…");
-		return out.slice(-height);
+		return { lines: out.slice(-height), cursor };
 	}
 
 	private close(): void {
@@ -1061,15 +1067,26 @@ function lineToAnsi(
 	term: XtermLike,
 	lineIndex: number,
 	selection: NormalizedSelection | null,
+	cursor: { row: number; col: number } | null,
 ): string {
-	if (!line) return "";
+	const isCursorRow = cursor !== null && cursor.row === lineIndex;
 	let last = -1;
+	if (!line) {
+		// No buffer line: show the cursor as an inverse block at the start of the line.
+		if (isCursorRow && cursor!.col >= 0) return CURSOR_MARKER + "\x1b[7m \x1b[0m";
+		return "";
+	}
 	for (let x = 0; x < line.length; x++) {
 		const cell = line.getCell(x, reusable);
 		if (!cell || cell.getWidth() === 0) continue;
 		if (cell.getChars()) last = x;
 	}
-	if (last < 0) return "";
+	if (last < 0) {
+		// Empty line: show the cursor as a full inverse block at the start of the line
+		// (or as an inverse space when it sits past the end of the content).
+		if (isCursorRow && cursor!.col >= 0) return CURSOR_MARKER + "\x1b[7m \x1b[0m";
+		return "";
+	}
 
 	let out = "";
 	let prevAttr = "";
@@ -1084,20 +1101,48 @@ function lineToAnsi(
 			prevUri = uri;
 		}
 		const selected = pointWithinSelection(lineIndex, x, selection);
-		const key = attrKey(cell, selected);
+		// The PTY cursor renders as a solid inverse block so it stays visible even though
+		// the outer TUI hides the hardware cursor by default. The zero-width CURSOR_MARKER
+		// (stripped by the TUI) additionally positions the hardware cursor for IME and
+		// PI_HARDWARE_CURSOR=1 terminals; truncateToWidth keeps or drops it with the cell.
+		const isCursor = isCursorRow && x === cursor!.col;
+		if (isCursor) out += CURSOR_MARKER;
+		const key = attrKey(cell, selected, isCursor);
 		if (key !== prevAttr) {
-			out += attrsToAnsi(cell, selected);
+			out += attrsToAnsi(cell, selected, isCursor);
 			prevAttr = key;
 		}
 		out += cell.getChars() || " ";
 	}
 	if (prevUri) out += closeOsc8();
+	// Cursor past the end of the line content (cursorX == cols or beyond last cell):
+	// append an inverse space so the position is still visible.
+	if (isCursorRow && cursor!.col > last) {
+		out += CURSOR_MARKER + "\x1b[7m \x1b[0m";
+	}
 	return out + "\x1b[0m";
 }
 
-function attrKey(cell: BufferCellLike, selected = false): string {
+/**
+ * Resolve the PTY cursor into viewport coordinates. xterm's buffer cursorY is relative
+ * to baseY (the child terminal's viewport top); returns null when the cursor is outside
+ * the projected window (e.g. the user scrolled up into history).
+ */
+function cursorInViewport(
+	buf: XtermLike["buffer"]["active"],
+	start: number,
+	height: number,
+): { row: number; col: number } | null {
+	if (typeof buf.cursorX !== "number" || typeof buf.cursorY !== "number" || buf.cursorX < 0 || buf.cursorY < 0) return null;
+	const row = buf.baseY + buf.cursorY - start;
+	if (row < 0 || row >= height) return null;
+	return { row, col: buf.cursorX };
+}
+
+function attrKey(cell: BufferCellLike, selected = false, isCursor = false): string {
 	return [
 		selected ? 1 : 0,
+		isCursor ? 1 : 0,
 		cell.isBold(),
 		cell.isDim(),
 		cell.isItalic(),
@@ -1116,14 +1161,14 @@ function attrKey(cell: BufferCellLike, selected = false): string {
 	].join(";");
 }
 
-function attrsToAnsi(cell: BufferCellLike, selected = false): string {
+function attrsToAnsi(cell: BufferCellLike, selected = false, isCursor = false): string {
 	const codes: string[] = ["0"];
 	if (cell.isBold()) codes.push("1");
 	if (cell.isDim()) codes.push("2");
 	if (cell.isItalic()) codes.push("3");
 	if (cell.isUnderline()) codes.push("4");
 	if (cell.isBlink()) codes.push("5");
-	if (cell.isInverse() || selected) codes.push("7");
+	if (cell.isInverse() || selected || isCursor) codes.push("7");
 	if (cell.isInvisible()) codes.push("8");
 	if (cell.isStrikethrough()) codes.push("9");
 	if (cell.isOverline()) codes.push("53");
