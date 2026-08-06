@@ -117,6 +117,7 @@ export class DashboardComponent implements Component {
 	private input = "";
 	private filterQuery = "";
 	private pending: PendingConfirm | null = null;
+	private deleteArm: { id: string; at: number } | null = null;
 	private helpReturnMode: ReturnableMode = "list";
 	private ptyHelpReturnMode: ReturnableMode = "list";
 	private peekId: string | null = null;
@@ -313,6 +314,7 @@ export class DashboardComponent implements Component {
 	}
 
 	private handleListKey(data: string): void {
+		if (!matchesKey(data, Key.ctrl("x"))) this.deleteArm = null;
 		if (matchesKey(data, Key.up)) return void this.moveSelection(-1);
 		if (matchesKey(data, Key.down)) return void this.moveSelection(1);
 		if (matchesKey(data, Key.right) || data === ">") return this.attachSelected();
@@ -333,7 +335,7 @@ export class DashboardComponent implements Component {
 		if (matchesKey(data, Key.ctrl("t"))) return this.togglePin();
 		if (matchesKey(data, Key.ctrl("s"))) return this.stopSelected();
 		if (data === "d") return this.confirmDone();
-		if (matchesKey(data, Key.ctrl("x"))) return this.confirmDelete();
+		if (matchesKey(data, Key.ctrl("x"))) return this.handleDeleteKey();
 		if (data === "X") return this.confirmDeleteState();
 		if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
 			if (this.input.length > 0) {
@@ -945,20 +947,20 @@ export class DashboardComponent implements Component {
 		return { ok: true };
 	}
 
-	private confirmDelete(): void {
+	private handleDeleteKey(): void {
 		const row = this.selectedRow();
 		if (!row) return;
-		const busy = isAgentBusy(row);
-		this.pending = {
-			prompt: `Delete "${row.meta.name}"?${busy ? " Active run will be stopped." : ""} Session file is preserved. (y/N)`,
-			onYes: () => {
-				const res = this.deps.service.archive(row.meta.id);
-				if (!res.ok) this.notice(res.error ?? "Delete failed", "error");
-				else this.notice("Deleted", "info");
-				this.refresh();
-			},
-		};
-		this.mode = "confirm";
+		const now = Date.now();
+		if (this.deleteArm !== null && this.deleteArm.id === row.meta.id && now - this.deleteArm.at <= DELETE_DOUBLE_PRESS_MS) {
+			this.deleteArm = null;
+			const res = this.deps.service.archive(row.meta.id);
+			if (!res.ok) this.notice(res.error ?? "Delete failed", "error");
+			else this.notice(`Deleted "${row.meta.name}"`, "info");
+			this.refresh();
+			return;
+		}
+		this.deleteArm = { id: row.meta.id, at: now };
+		this.notifyInputState(`Press ctrl+x again quickly to delete "${row.meta.name}"${isAgentBusy(row) ? " (stops the active run)" : ""}`, "warning");
 	}
 
 	private confirmDeleteState(): void {
@@ -1219,7 +1221,7 @@ export class DashboardComponent implements Component {
 			]);
 		}
 		const primary = this.input.trim() ? "enter launch" : live ? "enter attach live" : "enter resume";
-		const hints = ["i insert", primary, "→ attach", "m multi-select", ...(unread > 0 ? [`•${unread} unread`] : []), "d done", "space peek", "v transcript", "e evidence", "ctrl+n new session", "ctrl+r rename", "ctrl+x delete", "X delete state", "/ filter", "! pty", "? help"];
+		const hints = ["i insert", primary, "→ attach", "m multi-select", ...(unread > 0 ? [`•${unread} unread`] : []), "d done", "space peek", "v transcript", "e evidence", "ctrl+n new session", "ctrl+r rename", "ctrl+x x2 delete", "X delete state", "/ filter", "! pty", "? help"];
 		if (this.input.trim()) hints.splice(1, 0, "esc clear");
 		return this.hintLine("NORMAL", "muted", hints);
 	}
@@ -1548,7 +1550,8 @@ export class DashboardComponent implements Component {
 			["/", "Filter in normal mode; use i then / for slash commands"],
 			["!", "Open node-pty diagnostics and fix steps"],
 			["ctrl+n", "Open the new-session launch dialog (prompt pre-filled)"],
-			["ctrl+r/t/s/x", "Rename · pin · stop · delete selected"],
+			["ctrl+r/t/s", "Rename · pin · stop selected"],
+			["ctrl+x x2", "Delete selected session (quick double-press, no confirm)"],
 			["X", "Delete all inactive sessions in selected state"],
 			["v", "Open read-only transcript view"],
 			["In select", "a select all visible · u clear · d move done · ctrl+x delete done · esc cancel"],
@@ -1684,6 +1687,8 @@ function renderCenteredBox(lines: string[], width: number, height: number, theme
 	for (const line of box) out.push(`${" ".repeat(left)}${line}`);
 	return out;
 }
+
+const DELETE_DOUBLE_PRESS_MS = 500;
 
 const AGENTBOARD_VERSION = readAgentBoardVersion();
 function readAgentBoardVersion(): string {
