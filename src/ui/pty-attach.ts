@@ -1,13 +1,13 @@
 /** Live PTY attach surface for hosted agent-board rows. */
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import type { Component, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { isProbablyEmptyPiInputLine } from "../core/pty-input.mjs";
 import { findHttpUrlAtCells, findWordRangeAtCells } from "../core/pty-links.mjs";
-import { nextAttachRender, shouldScheduleAttachRenderForMessage } from "../core/pty-attach-render.mjs";
+import { createAttachOutputRenderScheduler, nextAttachRender, shouldScheduleAttachRenderForMessage } from "../core/pty-attach-render.mjs";
 import { clampInt, parseMouseInputChunk, resolveWheelLines, scrollViewportTop, selectionDragScrollLines } from "../core/pty-scroll.mjs";
 
 export type PtyAttachResult = { action: "detached" } | { action: "closed"; exitCode?: number | null };
@@ -33,6 +33,14 @@ const XTSHIFTESCAPE_SELECT = "\x1b[>0s";
 const DOUBLE_CLICK_MS = 260;
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const LOADING_TICK_MS = 120;
+/** How long to keep the loading banner after the last resize-jiggle during attach. */
+const ATTACH_SETTLE_MS = 250;
+/** Hard cap on the attach transition so a silent session can't stall the banner. */
+const ATTACH_HARD_TIMEOUT_MS = 2500;
+/** How many tail bytes of the screen log to replay on attach. Read from the file tail
+ * (not the whole file) so multi-MB logs don't block startup; ~60KB covers the last
+ * handful of screens, which is all a fresh attach needs. */
+const ATTACH_REPLAY_BYTES = 60_000;
 const OSC52_PREFIX = "\x1b]52;";
 const OSC52_MAX_BYTES = 1_000_000;
 const OSC52_CARRY_MAX_BYTES = OSC52_MAX_BYTES + 4096;
@@ -128,10 +136,20 @@ export class PtyAttachComponent implements Component {
 	// loading banner instead of an empty buffer so a slow (cold) host start doesn't leave
 	// the previous screen visible.
 	private receivedOutput = false;
+	// Attach transition: hold the loading banner until the screen-log replay and the
+	// initial resize-jiggle redraws settle, so attach never visibly scrolls/flashes the
+	// buffer. `receivedOutput` tracks buffer content; `attaching` gates whether we paint it.
+	private attaching = true;
+	private attachSettleTimer: ReturnType<typeof setTimeout> | null = null;
+	private attachHardTimeout: ReturnType<typeof setTimeout> | null = null;
 	// Force a single full-clear on the first paint so the prior session/dashboard can't
 	// ghost behind this overlay; every later paint uses the TUI's coalesced, throttled,
 	// differential renderer so wheel/output bursts don't each trigger a full repaint.
 	private firstPaint = true;
+	// Coalesce live PTY output repaints to ~25fps. node-pty splits one child-TUI update
+	// into many small chunks; painting after each chunk would drive the outer TUI to its
+	// frame cap and expose intermediate frames (visible as flicker on a busy session).
+	private readonly outputRenderScheduler = createAttachOutputRenderScheduler(() => this.scheduleRender());
 
 	constructor(
 		private readonly tui: TUI,
@@ -216,7 +234,7 @@ export class PtyAttachComponent implements Component {
 		const height = this.tui.terminal?.rows ?? 24;
 		const bodyHeight = Math.max(1, height - 2);
 		let body: string[];
-		if (this.receivedOutput) {
+		if (!this.attaching && this.receivedOutput) {
 			body = this.project(bodyHeight, width);
 			while (body.length < bodyHeight) body.unshift("");
 		} else {
@@ -290,6 +308,7 @@ export class PtyAttachComponent implements Component {
 			this.forceChildRedraw();
 			this.enableMouseScroll();
 			this.scheduleRender();
+			this.startAttachSettle();
 		});
 		socket.on("data", (chunk) => this.onSocketData(chunk.toString("utf8")));
 		socket.on("close", () => {
@@ -333,9 +352,9 @@ export class PtyAttachComponent implements Component {
 
 	/** Animate the loading banner until the first PTY output arrives (or we close). */
 	private startLoadingTicker(): void {
-		if (this.loadingTimer || this.receivedOutput || this.closed) return;
+		if (this.loadingTimer || !this.attaching || this.closed) return;
 		this.loadingTimer = setInterval(() => {
-			if (this.closed || this.receivedOutput) return this.stopLoadingTicker();
+			if (this.closed || !this.attaching) return this.stopLoadingTicker();
 			this.tui.requestRender();
 		}, LOADING_TICK_MS);
 		this.loadingTimer.unref?.();
@@ -345,6 +364,45 @@ export class PtyAttachComponent implements Component {
 		if (!this.loadingTimer) return;
 		clearInterval(this.loadingTimer);
 		this.loadingTimer = null;
+	}
+
+	/**
+	 * Attach transition lifecycle. Keep the loading banner up while the screen-log replay
+	 * and the initial resize-jiggle redraws settle, so the buffer doesn't visibly scroll or
+	 * flash through the viewport on attach. Each `forceChildRedraw` defers the settle
+	 * window; a hard timeout guards against a session that never produces output.
+	 */
+	private startAttachSettle(): void {
+		if (!this.attaching) return;
+		this.deferAttachSettle();
+		if (!this.attachHardTimeout) {
+			this.attachHardTimeout = setTimeout(() => this.finishAttachTransition(), ATTACH_HARD_TIMEOUT_MS);
+			this.attachHardTimeout.unref?.();
+		}
+	}
+
+	private deferAttachSettle(): void {
+		if (!this.attaching) return;
+		if (this.attachSettleTimer) clearTimeout(this.attachSettleTimer);
+		this.attachSettleTimer = setTimeout(() => this.finishAttachTransition(), ATTACH_SETTLE_MS);
+		this.attachSettleTimer.unref?.();
+	}
+
+	private finishAttachTransition(): void {
+		if (!this.attaching) return;
+		this.attaching = false;
+		if (this.attachSettleTimer) {
+			clearTimeout(this.attachSettleTimer);
+			this.attachSettleTimer = null;
+		}
+		if (this.attachHardTimeout) {
+			clearTimeout(this.attachHardTimeout);
+			this.attachHardTimeout = null;
+		}
+		this.stopLoadingTicker();
+		// Force a full clear so the loading banner is replaced atomically by the settled
+		// buffer, instead of diffing banner lines into buffer lines.
+		this.scheduleRender(true);
 	}
 
 	private clearRedrawTimer(): void {
@@ -669,9 +727,13 @@ export class PtyAttachComponent implements Component {
 		// a different terminal size. Real terminal zoom fixes that by causing SIGWINCH;
 		// do the same proactively so the child Pi redraws for the attach viewport.
 		this.sendResize(jiggle.cols, jiggle.rows);
+		this.deferAttachSettle();
 		this.redrawTimer = setTimeout(() => {
 			this.redrawTimer = null;
-			if (!this.closed && this.connected) this.sendResize(cols, rows);
+			if (!this.closed && this.connected) {
+				this.sendResize(cols, rows);
+				this.deferAttachSettle();
+			}
 		}, 40);
 		this.redrawTimer.unref?.();
 	}
@@ -790,8 +852,26 @@ export class PtyAttachComponent implements Component {
 	private replayScreenLog(): void {
 		if (!this.opts.screenLogPath || !existsSync(this.opts.screenLogPath)) return;
 		try {
-			const raw = readFileSync(this.opts.screenLogPath, "utf8");
-			this.pushOutput(raw.slice(-100_000));
+			// Read only the tail of the log instead of the whole file: large logs (tens of MB)
+			// would otherwise block the attach on a full readFileSync + UTF-8 decode before the
+			// first frame. Skip a leading partial line so we don't inject a half escape sequence.
+			const { size } = statSync(this.opts.screenLogPath);
+			const start = Math.max(0, size - ATTACH_REPLAY_BYTES);
+			const length = size - start;
+			if (length <= 0) return;
+			const fd = openSync(this.opts.screenLogPath, "r");
+			try {
+				const buf = Buffer.alloc(length);
+				readSync(fd, buf, 0, length, start);
+				let tail = buf.toString("utf8");
+				if (start > 0) {
+					const nl = tail.indexOf("\n");
+					tail = nl >= 0 ? tail.slice(nl + 1) : tail;
+				}
+				this.pushOutput(tail);
+			} finally {
+				closeSync(fd);
+			}
 		} catch {}
 	}
 
@@ -799,14 +879,15 @@ export class PtyAttachComponent implements Component {
 		if (data.length === 0) return;
 		if (opts.forwardProtocols) this.forwardTerminalProtocols(data);
 		// @xterm/headless parses asynchronously; the buffer is only populated once this
-		// callback fires. Flip out of the loading state here (not synchronously) so a warm
-		// (replayed) attach never paints the banner over a not-yet-parsed buffer.
+		// callback fires. Mark the buffer as ready (so the project path can paint it), but
+		// stay on the loading banner while `attaching` — otherwise the screen-log replay and
+		// the initial resize-jiggle redraws would flash through the viewport. Each parsed
+		// chunk also defers the settle window, so the banner holds until output actually
+		// stops arriving (i.e. the redraw finished), not just until the resize jiggle ends.
 		this.term.write(data, () => {
-			if (!this.receivedOutput) {
-				this.receivedOutput = true;
-				this.stopLoadingTicker();
-			}
-			this.scheduleRender();
+			this.receivedOutput = true;
+			this.deferAttachSettle();
+			this.outputRenderScheduler.request();
 		});
 	}
 
@@ -834,6 +915,15 @@ export class PtyAttachComponent implements Component {
 		this.clearRetry();
 		this.clearRedrawTimer();
 		this.stopLoadingTicker();
+		this.outputRenderScheduler.dispose();
+		if (this.attachSettleTimer) {
+			clearTimeout(this.attachSettleTimer);
+			this.attachSettleTimer = null;
+		}
+		if (this.attachHardTimeout) {
+			clearTimeout(this.attachHardTimeout);
+			this.attachHardTimeout = null;
+		}
 		try {
 			this.socket?.destroy();
 		} catch {}
