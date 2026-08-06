@@ -515,8 +515,18 @@ export class PtyAttachComponent implements Component {
 
 	private handleLocalMouseEvent(mouse: { button: number; row: number; col: number; action: string }): void {
 		const primary = (mouse.button & 3) === 0;
+		const middleButton = (mouse.button & 3) === 1;
 		if (mouse.action === "press") {
 			this.clearSelectionAutoScroll();
+			if (middleButton) {
+				// Middle-click paste: forward the X11 PRIMARY selection to the hosted
+				// session as input, mimicking the terminal-native middle-click paste
+				// that mouse reporting (kept on for wheel scrolling) would swallow.
+				this.pastePrimarySelection();
+				this.clearPendingClick();
+				this.clearSelection();
+				return;
+			}
 			if (!primary) {
 				this.clearPendingClick();
 				this.clearSelection();
@@ -659,9 +669,51 @@ export class PtyAttachComponent implements Component {
 		const text = this.selectionText();
 		if (!text) return;
 		const seq = osc52CopySequence(text);
-		if (!seq) return;
+		if (seq) {
+			try {
+				this.tui.terminal.write(seq);
+			} catch {}
+		}
+		// Also mirror the selection into the X11 PRIMARY selection so the rest of the
+		// desktop can middle-click-paste it — closes the loop with pastePrimarySelection().
+		this.writePrimarySelection(text);
+	}
+
+	/**
+	 * Middle-click paste. Reads the X11 PRIMARY selection via xclip and forwards it to
+	 * the hosted session as input, mimicking the terminal-native middle-click paste that
+	 * mouse reporting (kept on for wheel scrolling) would otherwise swallow. Silent no-op
+	 * when xclip is absent or AGENT_BOARD_ATTACH_NATIVE_PASTE=0.
+	 */
+	private pastePrimarySelection(): void {
+		if (process.env.AGENT_BOARD_ATTACH_NATIVE_PASTE === "0") return;
 		try {
-			this.tui.terminal.write(seq);
+			const child = spawn("xclip", ["-o", "-selection", "primary"], { stdio: ["ignore", "pipe", "ignore"] });
+			let out = "";
+			const timer = setTimeout(() => {
+				try {
+					child.kill("SIGKILL");
+				} catch {}
+			}, 800);
+			child.stdout?.on("data", (chunk: Buffer) => {
+				out += chunk.toString("utf8");
+			});
+			child.on("error", () => clearTimeout(timer));
+			child.on("close", () => {
+				clearTimeout(timer);
+				if (!this.closed && out) this.send({ type: "input", data: out });
+			});
+		} catch {}
+	}
+
+	/** Write `text` to the X11 PRIMARY selection so other apps can middle-click-paste it. */
+	private writePrimarySelection(text: string): void {
+		if (process.env.AGENT_BOARD_ATTACH_NATIVE_PASTE === "0") return;
+		try {
+			const child = spawn("xclip", ["-selection", "primary"], { stdio: ["pipe", "ignore", "ignore"] });
+			child.stdin?.on("error", () => {});
+			child.on("error", () => {});
+			child.stdin?.end(text);
 		} catch {}
 	}
 
