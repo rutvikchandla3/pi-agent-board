@@ -36,8 +36,27 @@ export const hostConfigPath = (root, viewId) => path.join(viewDir(root, viewId),
 export const titleConfigPath = (root, viewId) => path.join(viewDir(root, viewId), "title-config.json");
 /** @param {string} root @param {string} viewId */
 export const autoStateConfigPath = (root, viewId) => path.join(viewDir(root, viewId), "auto-state-config.json");
+/**
+ * Named pipe used for the host control socket on Windows. Named pipes are kernel
+ * objects, not filesystem entries, so existsSync/unlink never apply to them; they
+ * vanish automatically when the owning process exits. Names must be ≤ 256 chars.
+ * @param {string} viewId
+ */
+export const controlPipeName = (viewId) => `\\\\.\\pipe\\pi-agent-board-${viewId}`;
+/**
+ * Control socket address for a view, platform-aware. On Windows plain filesystem
+ * paths cannot be bound by node's net module (EACCES) — only `\\.\pipe\`-style
+ * names work (see libuv#458, nodejs/node#55979).
+ * @param {"win32"|"linux"|"darwin"} platform
+ * @param {string} root
+ * @param {string} viewId
+ */
+export function controlSocketPathFor(platform, root, viewId) {
+	if (platform === "win32") return controlPipeName(viewId);
+	return path.join(viewDir(root, viewId), "control.sock");
+}
 /** @param {string} root @param {string} viewId */
-export const controlSocketPath = (root, viewId) => path.join(viewDir(root, viewId), "control.sock");
+export const controlSocketPath = (root, viewId) => controlSocketPathFor(process.platform, root, viewId);
 /** @param {string} root @param {string} viewId */
 export const screenLogPath = (root, viewId) => path.join(viewDir(root, viewId), "screen.log");
 /** @param {string} root @param {string} viewId */

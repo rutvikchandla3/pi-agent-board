@@ -281,7 +281,10 @@ export class PtyAttachComponent implements Component {
 
 	private connect(): void {
 		if (this.closed || this.connected || this.socket) return;
-		if (!existsSync(this.opts.socketPath)) {
+		// On Windows the control socket is a named pipe — it never exists as a
+		// filesystem entry, so existsSync can't gate the connect; a missing pipe
+		// surfaces as an error event on the socket and retries via scheduleReconnect.
+		if (process.platform !== "win32" && !existsSync(this.opts.socketPath)) {
 			this.status = `starting host… ${Math.ceil((Date.now() - this.connectStartedAt) / 1000)}s`;
 			this.scheduleReconnect();
 			return;
