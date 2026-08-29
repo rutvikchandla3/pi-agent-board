@@ -86,7 +86,7 @@ function runOneShot(command, args, opts = {}) {
 	return new Promise((resolve) => {
 		let out = "";
 		let settled = false;
-		const child = spawn(command, args, { cwd: opts.cwd, env: opts.env ?? process.env, stdio: ["ignore", "pipe", "ignore"] });
+		const child = spawn(command, args, { cwd: opts.cwd, env: opts.env ?? process.env, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
 		let buf = "";
 		const finish = () => {
 			if (settled) return;
