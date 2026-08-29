@@ -96,8 +96,14 @@ export async function openDashboard(
 				});
 				interval = setInterval(() => {
 					service.reconcile();
-					comp.refresh();
-					requestDashboardRender(tui);
+					// Only repaint when the underlying row data actually changed;
+					// otherwise skip. The previous unconditional repaint kept the
+					// whole TUI render pipeline busy every POLL_MS even when rows
+					// were identical (visible flicker before #52's diff rendering).
+					const changed = comp.refresh();
+					if (changed) {
+						requestDashboardRender(tui);
+					}
 				}, POLL_MS);
 				const withDispose = comp as DashboardComponent & { dispose: () => void };
 				withDispose.dispose = () => {

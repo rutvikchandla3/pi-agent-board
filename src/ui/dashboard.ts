@@ -12,6 +12,7 @@ import type { Component, EditorTheme, KeybindingsManager, TUI } from "@earendil-
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { requestDashboardRender } from "../core/dashboard-render.mjs";
 import { isGenericStatusText, normalizeGenericStatusText } from "../core/derive.mjs";
+import { rowDataSignature } from "../core/dashboard-signature.mjs";
 import { firstSentence, truncate } from "../core/heuristics.mjs";
 import {
 	canonicalModelRef,
@@ -158,9 +159,19 @@ export class DashboardComponent implements Component {
 
 	// ---- data ---------------------------------------------------------------
 
-	refresh(): void {
+	/**
+	 * Cached signature of the row data that render() depends on. The poll loop uses
+	 * it to skip repaints when nothing changed (see rowDataSignature).
+	 */
+	private lastDataSignature: string | null = null;
+
+	/** @returns true when the underlying row data changed since the last refresh. */
+	refresh(): boolean {
 		const previousSelected = this.selectedId;
 		const all = this.deps.service.rows();
+		const signature = rowDataSignature(all);
+		const changed = signature !== this.lastDataSignature;
+		this.lastDataSignature = signature;
 		this.rows = this.filterQuery ? filterRows(all, this.filterQuery) : all;
 		const groups = groupRowsByFolder(this.rows, Date.now());
 		this.orderedIds = groups.flatMap((g) => g.folders.flatMap((f) => f.rows.map((r) => r.id)));
@@ -173,6 +184,7 @@ export class DashboardComponent implements Component {
 			this.selectedId = this.orderedIds[0];
 		}
 		if (this.selectedId && this.selectedId !== previousSelected) this.prewarmSelected();
+		return changed;
 	}
 
 	private selectedRow(): Row | null {
