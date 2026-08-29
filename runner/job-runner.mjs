@@ -80,6 +80,7 @@ function main() {
 	const worker = spawn(config.piCommand, args, {
 		cwd: config.cwd,
 		stdio: ["ignore", "pipe", "pipe"],
+		windowsHide: true,
 		env: process.env,
 	});
 
@@ -384,7 +385,7 @@ async function maybeModelSummary(config, status) {
 function runOneShot(command, args, timeoutMs = 20000) {
 	return new Promise((resolve) => {
 		let out = "";
-		const child = spawn(command, args, { stdio: ["ignore", "pipe", "ignore"] });
+		const child = spawn(command, args, { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
 		let buf = "";
 		child.stdout.on("data", (c) => {
 			buf += c.toString();
