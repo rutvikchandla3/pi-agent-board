@@ -1103,7 +1103,10 @@ function compactSummary(text) {
 function sendHostMessage(row, message) {
 	const socketPath = row.host?.socketPath;
 	if (!socketPath) return { ok: false, error: "No host socket" };
-	if (!existsSync(socketPath)) return { ok: false, error: "Host socket is not ready" };
+	// On Windows the control socket is a named pipe, which never exists as a
+	// filesystem entry, so existsSync can't be used as a readiness probe there.
+	// A missing pipe surfaces as a connection error on the socket below.
+	if (process.platform !== "win32" && !existsSync(socketPath)) return { ok: false, error: "Host socket is not ready" };
 	try {
 		const socket = createConnection(socketPath);
 		socket.on("connect", () => {

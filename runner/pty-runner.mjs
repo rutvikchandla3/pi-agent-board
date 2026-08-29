@@ -116,7 +116,7 @@ function main() {
 		process.exit(1);
 	}
 	childPid = child.pid ?? null;
-	update({ childPid, state: "alive" });
+	update({ childPid });
 
 	child.onData((data) => {
 		screenLogBytes = appendBoundedScreenLog(screenLog, data, screenLogBytes);
@@ -156,7 +156,7 @@ function main() {
 	});
 	server.on("error", (err) => {
 		update({ state: "failed", endedAt: Date.now(), error: err instanceof Error ? err.message : String(err), exitCode: 1 });
-		try { child.kill("SIGTERM"); } catch {}
+		killChild(child, childPid, "SIGTERM");
 		process.exit(1);
 	});
 	server.listen(socketPath, () => update({ socketPath, state: "alive" }));
@@ -182,11 +182,12 @@ function main() {
 			case "interrupt":
 				child.write("\x1b");
 				break;
-			case "terminate":
+			case "terminate": {
 				stopping = true;
-				child.kill("SIGTERM");
-				setTimeout(() => child.kill("SIGKILL"), 4000).unref?.();
+				killChild(child, childPid, "SIGTERM");
+				setTimeout(() => killChild(child, childPid, "SIGKILL"), 4000).unref?.();
 				break;
+			}
 			case "detach":
 				socket.end();
 				break;
@@ -205,7 +206,7 @@ function main() {
 		stopping = true;
 		try { server.close(); } catch {}
 		try { if (existsSync(socketPath)) unlinkSync(socketPath); } catch {}
-		try { child.kill("SIGTERM"); } catch {}
+		killChild(child, childPid, "SIGTERM");
 		setTimeout(() => process.exit(0), 100).unref?.();
 	};
 	process.on("SIGTERM", shutdown);
@@ -255,6 +256,26 @@ function spawnInteractive(command, args, opts) {
 
 function send(socket, msg) {
 	socket.write(JSON.stringify(msg) + "\n");
+}
+
+/**
+ * Terminate the hosted child on all platforms. node-pty's kill() throws
+ * "Signals not supported on windows", so on win32 we TerminateProcess via
+ * process.kill; on unix keep the graceful SIGTERM/SIGKILL path through the pty.
+ * @param {{ kill: (signal: string) => void }} child
+ * @param {number|null} pid
+ * @param {"SIGTERM"|"SIGKILL"} [signal]
+ */
+function killChild(child, pid, signal = "SIGTERM") {
+	if (process.platform === "win32") {
+		if (pid) {
+			try {
+				process.kill(pid, "SIGKILL");
+				return;
+			} catch {}
+		}
+	}
+	try { child.kill(signal); } catch {}
 }
 
 function clampInt(value, min, max, fallback) {
